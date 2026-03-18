@@ -61,6 +61,20 @@ export interface GenerationResult {
   route_preview: RoutePreview[];
 }
 
+export interface JobStatusResponse {
+  status: 'processing' | 'done' | 'error';
+  detail?: string;
+  // Populated when status === 'done' (same shape as GenerationResult)
+  generation_id?: string;
+  timetable_rows?: number;
+  route_rows?: number;
+  warnings?: string[];
+  provenance?: Provenance;
+  summary?: GenerationSummary;
+  timetable_preview?: TimetablePreview[];
+  route_preview?: RoutePreview[];
+}
+
 export interface ValidateParams {
   station_name: string;
   operator_code: string;
@@ -95,7 +109,8 @@ export async function validateInputs(params: ValidateParams): Promise<Validation
   return await resp.json();
 }
 
-export async function generateCSV(params: GenerateParams): Promise<GenerationResult> {
+/** POST the CIF file + params; returns a job_id immediately (HTTP 202). */
+export async function startGenerate(params: GenerateParams): Promise<{ job_id: string }> {
   const body = new FormData();
   body.append('cif_file', params.cif_file);
   body.append('station_name', params.station_name);
@@ -115,6 +130,15 @@ export async function generateCSV(params: GenerateParams): Promise<GenerationRes
     throw new Error(detail.detail || `Generation failed: ${resp.status}`);
   }
 
+  return await resp.json();
+}
+
+/** Poll the status of an async generation job. */
+export async function getGenerateStatus(jobId: string): Promise<JobStatusResponse> {
+  const resp = await fetch(`${API_BASE}/api/generate/status/${jobId}`);
+  if (!resp.ok) {
+    throw new Error(`Status check failed: ${resp.status}`);
+  }
   return await resp.json();
 }
 

@@ -8,7 +8,8 @@ import {
   GenerationResult,
   ValidationResult,
   validateInputs,
-  generateCSV,
+  startGenerate,
+  getGenerateStatus,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
   getDebugDownloadUrl,
@@ -27,6 +28,7 @@ export default function Home() {
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
 
   const updateField = (field: keyof ValidateParams, value: string) => {
@@ -55,6 +57,7 @@ export default function Home() {
       return;
     }
     setLoading(true);
+    setProgress('Uploading CIF file…');
     setError(null);
     setResult(null);
 
@@ -64,12 +67,32 @@ export default function Home() {
         date_end: form.date_end || undefined,
         cif_file: cifFile,
       };
-      const res = await generateCSV(params);
-      setResult(res);
+
+      // POST the file; backend returns immediately with a job_id
+      const { job_id } = await startGenerate(params);
+      setProgress('Processing CIF data — this may take several minutes for large files…');
+
+      // Poll the status endpoint until done or error
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000));
+        const status = await getGenerateStatus(job_id);
+
+        if (status.status === 'done') {
+          // The done payload has the same shape as GenerationResult
+          setResult(status as unknown as GenerationResult);
+          break;
+        }
+
+        if (status.status === 'error') {
+          throw new Error(status.detail || 'Generation failed');
+        }
+        // still processing — keep polling
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Generation failed');
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -192,7 +215,7 @@ export default function Home() {
               disabled={loading || validating || !cifFile}
             >
               {loading && <span className="loading-spinner" />}
-              Generate CSV
+              {loading ? 'Generating…' : 'Generate CSV'}
             </button>
           </div>
         </form>
@@ -215,6 +238,14 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Progress display */}
+      {progress && (
+        <div className="success-box" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="loading-spinner" />
+          {progress}
+        </div>
+      )}
 
       {/* Error display */}
       {error && (

@@ -3,7 +3,7 @@ const nextConfig = {
   reactStrictMode: true,
   experimental: {
     // CIF timetable files can be several hundred MB; raise the proxy body limit accordingly.
-    middlewareClientMaxBodySize: 500 * 1024 * 1024, // 500 MB
+    middlewareClientMaxBodySize: 2 * 1024 * 1024 * 1024, // 2 GB
   },
   async rewrites() {
     return [

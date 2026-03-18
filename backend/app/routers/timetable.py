@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Optional
-
-import io
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -29,9 +29,15 @@ from backend.app.services.orchestrator import Orchestrator
 
 router = APIRouter(prefix="/api", tags=["timetable"])
 
-# In-memory result cache (keyed by generation ID)
+# In-memory result cache (keyed by job/generation ID)
 # For production, use Redis or similar persistent store
 _result_cache: dict[str, dict] = {}
+
+# In-memory job status store
+_jobs: dict[str, dict] = {}
+
+# Thread pool for CPU-bound CIF parsing (max 2 concurrent jobs)
+_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class ValidateRequest(BaseModel):
@@ -46,6 +52,106 @@ class GenerateRequest(BaseModel):
     operator_code: str = Field(..., min_length=2, max_length=3)
     date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _run_generation(
+    job_id: str,
+    raw_bytes: bytes,
+    filename: str,
+    station: str,
+    operator: str,
+    start_date: date,
+    end_date: date,
+    state,
+) -> None:
+    """CPU-bound CIF parsing and timetable generation, executed in a thread pool."""
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+        del raw_bytes  # release memory as soon as possible
+
+        upload_parser = CIFParser()
+        upload_parser.parse_lines(text.splitlines(), source=filename)
+        del text
+
+        if not upload_parser.schedules:
+            _jobs[job_id] = {
+                "status": "error",
+                "detail": (
+                    f"No CIF schedules found in uploaded file '{filename}'. "
+                    "Ensure the file is a valid Network Rail CIF/MCA timetable."
+                ),
+            }
+            return
+
+        orchestrator = Orchestrator(
+            corpus=state.corpus,
+            cif_parser=upload_parser,
+            mileage=state.mileage,
+            darwin=state.darwin,
+            audit=state.audit,
+        )
+
+        result = orchestrator.generate(
+            station_name=station,
+            operator_code=operator,
+            date_start=start_date,
+            date_end=end_date,
+        )
+
+        timetable_csv = generate_timetable_csv(result.timetable_rows)
+        route_csv = generate_route_csv(result.route_rows)
+        debug_csv = generate_debug_csv(result.debug_rows)
+
+        _result_cache[job_id] = {
+            "timetable_csv": timetable_csv,
+            "route_csv": route_csv,
+            "debug_csv": debug_csv,
+        }
+
+        # Limit cache size
+        if len(_result_cache) > 100:
+            oldest = next(iter(_result_cache))
+            del _result_cache[oldest]
+
+        _jobs[job_id] = {
+            "status": "done",
+            "generation_id": job_id,
+            "timetable_rows": len(result.timetable_rows),
+            "route_rows": len(result.route_rows),
+            "warnings": result.warnings,
+            "provenance": result.provenance,
+            "summary": result.summary,
+            "timetable_preview": [
+                {
+                    "date": r.date,
+                    "departure_time": r.departure_time,
+                    "route_variant": r.route_variant,
+                    "train_class": r.train_class,
+                    "number_of_coaches": r.number_of_coaches,
+                }
+                for r in result.timetable_rows[:20]
+            ],
+            "route_preview": [
+                {
+                    "route_variant": r.route_variant,
+                    "seq": r.seq,
+                    "from_station": r.from_station,
+                    "to_station": r.to_station,
+                    "distance_miles": r.distance_miles,
+                    "run_min": r.run_min,
+                    "wait_min": r.wait_min,
+                }
+                for r in result.route_rows[:20]
+            ],
+        }
+
+        # Limit jobs store size
+        if len(_jobs) > 200:
+            oldest = next(iter(_jobs))
+            del _jobs[oldest]
+
+    except Exception as exc:
+        _jobs[job_id] = {"status": "error", "detail": str(exc)}
 
 
 @router.post("/validate")
@@ -88,8 +194,11 @@ async def generate_csv(
     date_start: str = Form(...),
     date_end: Optional[str] = Form(None),
 ) -> JSONResponse:
-    """Generate timetable and route CSVs from an uploaded CIF file."""
-    # Validate inputs
+    """Accept a CIF upload, start async generation, and return a job ID immediately.
+
+    Use GET /api/generate/status/{job_id} to poll for completion.
+    """
+    # Validate inputs (fast, no I/O)
     try:
         station = validate_station_name(station_name)
         operator = validate_operator_code(operator_code)
@@ -100,15 +209,12 @@ async def generate_csv(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"{e.field}: {e.message}")
 
-    # Parse uploaded CIF file
+    # Read the uploaded file (async, releases back-pressure to the client)
     raw_bytes = await cif_file.read()
     filename = cif_file.filename or "upload.CIF"
-    try:
-        text = raw_bytes.decode("utf-8", errors="replace")
-    except Exception:
-        raise HTTPException(status_code=400, detail="CIF file could not be decoded as text.")
 
-    first_line = text.split("\n", 1)[0].rstrip()
+    # Cheap LFS pointer check before spinning up the thread
+    first_line = raw_bytes[:200].decode("utf-8", errors="replace").split("\n", 1)[0].rstrip()
     if first_line.startswith("version https://git-lfs.github.com"):
         raise HTTPException(
             status_code=400,
@@ -118,91 +224,39 @@ async def generate_csv(
             ),
         )
 
-    upload_parser = CIFParser()
-    upload_parser.parse_lines(text.splitlines(), source=filename)
+    # Queue the CPU-bound work in the thread pool and return immediately
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "processing"}
 
-    if not upload_parser.schedules:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"No CIF schedules found in uploaded file '{filename}'. "
-                "Ensure the file is a valid Network Rail CIF/MCA timetable."
-            ),
-        )
-
-    # Build a per-request orchestrator using the uploaded CIF data
-    state = request.app.state
-    orchestrator = Orchestrator(
-        corpus=state.corpus,
-        cif_parser=upload_parser,
-        mileage=state.mileage,
-        darwin=state.darwin,
-        audit=state.audit,
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(
+        _executor,
+        _run_generation,
+        job_id,
+        raw_bytes,
+        filename,
+        station,
+        operator,
+        start_date,
+        end_date,
+        request.app.state,
     )
 
-    # Run generation
-    result = orchestrator.generate(
-        station_name=station,
-        operator_code=operator,
-        date_start=start_date,
-        date_end=end_date,
-    )
+    return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing"})
 
-    # Generate CSVs
-    timetable_csv = generate_timetable_csv(result.timetable_rows)
-    route_csv = generate_route_csv(result.route_rows)
-    debug_csv = generate_debug_csv(result.debug_rows)
 
-    # Store in cache with unique ID
-    gen_id = str(uuid.uuid4())
-    _result_cache[gen_id] = {
-        "timetable_csv": timetable_csv,
-        "route_csv": route_csv,
-        "debug_csv": debug_csv,
-        "result": {
-            "timetable_row_count": len(result.timetable_rows),
-            "route_row_count": len(result.route_rows),
-            "warnings": result.warnings,
-            "provenance": result.provenance,
-            "summary": result.summary,
-        },
-    }
+@router.get("/generate/status/{job_id}")
+async def get_generation_status(job_id: str) -> JSONResponse:
+    """Poll the status of an async generation job.
 
-    # Limit cache size
-    if len(_result_cache) > 100:
-        oldest = next(iter(_result_cache))
-        del _result_cache[oldest]
-
-    return JSONResponse(content={
-        "generation_id": gen_id,
-        "timetable_rows": len(result.timetable_rows),
-        "route_rows": len(result.route_rows),
-        "warnings": result.warnings,
-        "provenance": result.provenance,
-        "summary": result.summary,
-        "timetable_preview": [
-            {
-                "date": r.date,
-                "departure_time": r.departure_time,
-                "route_variant": r.route_variant,
-                "train_class": r.train_class,
-                "number_of_coaches": r.number_of_coaches,
-            }
-            for r in result.timetable_rows[:20]  # Preview first 20
-        ],
-        "route_preview": [
-            {
-                "route_variant": r.route_variant,
-                "seq": r.seq,
-                "from_station": r.from_station,
-                "to_station": r.to_station,
-                "distance_miles": r.distance_miles,
-                "run_min": r.run_min,
-                "wait_min": r.wait_min,
-            }
-            for r in result.route_rows[:20]
-        ],
-    })
+    Returns {"status": "processing"} while running,
+    the full generation result when status is "done",
+    or {"status": "error", "detail": "..."} on failure.
+    """
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return JSONResponse(content=job)
 
 
 @router.get("/download/{gen_id}/timetable.csv")
