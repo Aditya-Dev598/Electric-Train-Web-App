@@ -73,7 +73,6 @@ class Orchestrator:
         operator_code: str,
         date_start: date,
         date_end: date,
-        train_route: str,
     ) -> GenerationResult:
         """Run the full generation pipeline.
 
@@ -221,7 +220,6 @@ class Orchestrator:
                 result.timetable_rows.append(TimetableRow(
                     date=d.isoformat(),
                     departure_time=dep_formatted,
-                    train_route=train_route,
                     route_variant=variant_name,
                     train_class=train_class,
                     number_of_coaches=coaches,

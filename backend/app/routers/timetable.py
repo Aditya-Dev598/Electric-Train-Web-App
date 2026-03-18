@@ -17,7 +17,6 @@ from backend.app.security.validators import (
     validate_date,
     validate_date_range,
     validate_operator_code,
-    validate_route_name,
     validate_station_name,
 )
 from backend.app.services.cif_parser import CIFParser
@@ -40,7 +39,6 @@ class ValidateRequest(BaseModel):
     operator_code: str = Field(..., min_length=2, max_length=3)
     date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
-    train_route: str = Field(..., min_length=1, max_length=200)
 
 
 class GenerateRequest(BaseModel):
@@ -48,7 +46,6 @@ class GenerateRequest(BaseModel):
     operator_code: str = Field(..., min_length=2, max_length=3)
     date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
-    train_route: str = Field(..., min_length=1, max_length=200)
 
 
 @router.post("/validate")
@@ -73,11 +70,6 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
     except ValidationError as e:
         errors.append({"field": e.field, "message": e.message})
 
-    try:
-        validate_route_name(req.train_route, "train_route")
-    except ValidationError as e:
-        errors.append({"field": e.field, "message": e.message})
-
     if errors:
         return JSONResponse(
             status_code=422,
@@ -95,7 +87,6 @@ async def generate_csv(
     operator_code: str = Form(..., min_length=2, max_length=3),
     date_start: str = Form(...),
     date_end: Optional[str] = Form(None),
-    train_route: str = Form(..., min_length=1, max_length=200),
 ) -> JSONResponse:
     """Generate timetable and route CSVs from an uploaded CIF file."""
     # Validate inputs
@@ -106,7 +97,6 @@ async def generate_csv(
         end_date = validate_date(date_end) if date_end else start_date
         if date_end:
             validate_date_range(date_start, date_end)
-        train_route_v = validate_route_name(train_route, "train_route")
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"{e.field}: {e.message}")
 
@@ -156,7 +146,6 @@ async def generate_csv(
         operator_code=operator,
         date_start=start_date,
         date_end=end_date,
-        train_route=train_route_v,
     )
 
     # Generate CSVs
@@ -195,7 +184,6 @@ async def generate_csv(
             {
                 "date": r.date,
                 "departure_time": r.departure_time,
-                "train_route": r.train_route,
                 "route_variant": r.route_variant,
                 "train_class": r.train_class,
                 "number_of_coaches": r.number_of_coaches,
