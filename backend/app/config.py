@@ -6,15 +6,18 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Absolute path to the backend/data directory, regardless of CWD
+_DATA_DIR = Path(__file__).parent.parent / "data"
+
 
 @dataclass(frozen=True)
 class Settings:
     """Immutable application settings sourced from env vars / config files."""
 
     # --- Data file paths ---
-    cif_data_path: str = os.getenv("CIF_DATA_PATH", "data/cif")
-    corpus_data_path: str = os.getenv("CORPUS_DATA_PATH", "data/corpus/CORPUSExtract.json")
-    mileage_data_path: str = os.getenv("MILEAGE_DATA_PATH", "data/mileage/mileage.json")
+    cif_data_path: str = os.getenv("CIF_DATA_PATH", str(_DATA_DIR / "cif"))
+    corpus_data_path: str = os.getenv("CORPUS_DATA_PATH", str(_DATA_DIR / "corpus" / "CORPUSExtract.json"))
+    mileage_data_path: str = os.getenv("MILEAGE_DATA_PATH", str(_DATA_DIR / "mileage" / "mileage.json"))
 
     # --- Darwin API ---
     darwin_api_url: str = os.getenv(
