@@ -60,6 +60,60 @@ class CIFParser:
             "total_records_parsed": self._total_records,
         }
 
+    def parse_lines(self, lines, source: str = "<upload>") -> list[CIFSchedule]:
+        """Parse CIF data from an iterable of text lines.
+
+        Use this for uploaded file content. Each line should be a raw text line
+        (with or without trailing newline — both are handled).
+        """
+        self._file_path = source
+        self._schedules = []
+        self._total_records = 0
+        current_schedule: Optional[CIFSchedule] = None
+
+        for line in lines:
+            self._total_records += 1
+            line = line.rstrip("\n\r")
+
+            if len(line) < 2:
+                continue
+
+            record_type = line[:2]
+
+            if record_type == "HD":
+                self._parse_header(line)
+            elif record_type == "BS":
+                if current_schedule is not None:
+                    self._schedules.append(current_schedule)
+                current_schedule = self._parse_bs(line)
+            elif record_type == "BX":
+                if current_schedule is not None:
+                    self._parse_bx(line, current_schedule)
+            elif record_type == "LO":
+                if current_schedule is not None:
+                    loc = self._parse_lo(line)
+                    if loc:
+                        current_schedule.locations.append(loc)
+            elif record_type == "LI":
+                if current_schedule is not None:
+                    loc = self._parse_li(line)
+                    if loc:
+                        current_schedule.locations.append(loc)
+            elif record_type == "LT":
+                if current_schedule is not None:
+                    loc = self._parse_lt(line)
+                    if loc:
+                        current_schedule.locations.append(loc)
+            elif record_type == "ZZ":
+                break
+
+        if current_schedule is not None:
+            self._schedules.append(current_schedule)
+
+        logger.info("CIF parsed: %d records, %d schedules from %s",
+                    self._total_records, len(self._schedules), source)
+        return self._schedules
+
     def parse_file(self, file_path: str) -> list[CIFSchedule]:
         """Parse a CIF/MCA file and return all schedules."""
         path = Path(file_path)
@@ -78,57 +132,9 @@ class CIFParser:
             )
             return []
 
-        self._file_path = file_path
-        self._schedules = []
-        self._total_records = 0
-
-        current_schedule: Optional[CIFSchedule] = None
-
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                self._total_records += 1
-                line = line.rstrip("\n\r")
+            self.parse_lines(f, source=file_path)
 
-                if len(line) < 2:
-                    continue
-
-                record_type = line[:2]
-
-                if record_type == "HD":
-                    self._parse_header(line)
-                elif record_type == "BS":
-                    # Save previous schedule if exists
-                    if current_schedule is not None:
-                        self._schedules.append(current_schedule)
-                    current_schedule = self._parse_bs(line)
-                elif record_type == "BX":
-                    if current_schedule is not None:
-                        self._parse_bx(line, current_schedule)
-                elif record_type == "LO":
-                    if current_schedule is not None:
-                        loc = self._parse_lo(line)
-                        if loc:
-                            current_schedule.locations.append(loc)
-                elif record_type == "LI":
-                    if current_schedule is not None:
-                        loc = self._parse_li(line)
-                        if loc:
-                            current_schedule.locations.append(loc)
-                elif record_type == "LT":
-                    if current_schedule is not None:
-                        loc = self._parse_lt(line)
-                        if loc:
-                            current_schedule.locations.append(loc)
-                elif record_type == "ZZ":
-                    # End of file marker
-                    break
-
-        # Don't forget the last schedule
-        if current_schedule is not None:
-            self._schedules.append(current_schedule)
-
-        logger.info("CIF parsed: %d records, %d schedules from %s",
-                     self._total_records, len(self._schedules), file_path)
         return self._schedules
 
     def parse_directory(self, dir_path: str) -> list[CIFSchedule]:

@@ -59,6 +59,12 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         self._max_bytes = max_bytes
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        # Skip size check for multipart uploads (e.g. CIF file uploads).
+        # File uploads are streamed by FastAPI and are not a JSON-bloat DoS risk.
+        content_type = request.headers.get("content-type", "")
+        if content_type.startswith("multipart/form-data"):
+            return await call_next(request)
+
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > self._max_bytes:
             return JSONResponse(

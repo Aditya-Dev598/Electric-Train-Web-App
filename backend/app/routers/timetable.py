@@ -6,7 +6,9 @@ import uuid
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+import io
+
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -18,11 +20,13 @@ from backend.app.security.validators import (
     validate_route_name,
     validate_station_name,
 )
+from backend.app.services.cif_parser import CIFParser
 from backend.app.services.csv_exporter import (
     generate_debug_csv,
     generate_route_csv,
     generate_timetable_csv,
 )
+from backend.app.services.orchestrator import Orchestrator
 
 router = APIRouter(prefix="/api", tags=["timetable"])
 
@@ -84,25 +88,67 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
 
 
 @router.post("/generate")
-async def generate_csv(req: GenerateRequest, request: Request) -> JSONResponse:
-    """Generate timetable and route CSVs."""
+async def generate_csv(
+    request: Request,
+    cif_file: UploadFile = File(..., description="CIF/MCA timetable file from Network Rail"),
+    station_name: str = Form(..., min_length=1, max_length=100),
+    operator_code: str = Form(..., min_length=2, max_length=3),
+    date_start: str = Form(...),
+    date_end: Optional[str] = Form(None),
+    train_route: str = Form(..., min_length=1, max_length=200),
+) -> JSONResponse:
+    """Generate timetable and route CSVs from an uploaded CIF file."""
     # Validate inputs
     try:
-        station = validate_station_name(req.station_name)
-        operator = validate_operator_code(req.operator_code)
-        start_date = validate_date(req.date_start)
-        end_date = (
-            validate_date(req.date_end) if req.date_end
-            else start_date
-        )
-        if req.date_end:
-            validate_date_range(req.date_start, req.date_end)
-        train_route = validate_route_name(req.train_route, "train_route")
+        station = validate_station_name(station_name)
+        operator = validate_operator_code(operator_code)
+        start_date = validate_date(date_start)
+        end_date = validate_date(date_end) if date_end else start_date
+        if date_end:
+            validate_date_range(date_start, date_end)
+        train_route_v = validate_route_name(train_route, "train_route")
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"{e.field}: {e.message}")
 
-    # Get orchestrator from app state
-    orchestrator = request.app.state.orchestrator
+    # Parse uploaded CIF file
+    raw_bytes = await cif_file.read()
+    filename = cif_file.filename or "upload.CIF"
+    try:
+        text = raw_bytes.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(status_code=400, detail="CIF file could not be decoded as text.")
+
+    first_line = text.split("\n", 1)[0].rstrip()
+    if first_line.startswith("version https://git-lfs.github.com"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Uploaded file is a Git LFS pointer, not the actual CIF data. "
+                "Run 'git lfs pull' to download the real file before uploading."
+            ),
+        )
+
+    upload_parser = CIFParser()
+    upload_parser.parse_lines(text.splitlines(), source=filename)
+
+    if not upload_parser.schedules:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No CIF schedules found in uploaded file '{filename}'. "
+                "Ensure the file is a valid Network Rail CIF/MCA timetable."
+            ),
+        )
+
+    # Build a per-request orchestrator using the uploaded CIF data
+    state = request.app.state
+    orchestrator = Orchestrator(
+        corpus=state.corpus,
+        cif_parser=upload_parser,
+        mileage=state.mileage,
+        darwin=state.darwin,
+        audit=state.audit,
+    )
 
     # Run generation
     result = orchestrator.generate(
@@ -110,7 +156,7 @@ async def generate_csv(req: GenerateRequest, request: Request) -> JSONResponse:
         operator_code=operator,
         date_start=start_date,
         date_end=end_date,
-        train_route=train_route,
+        train_route=train_route_v,
     )
 
     # Generate CSVs
