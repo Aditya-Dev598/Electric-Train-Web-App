@@ -50,9 +50,9 @@ class CorpusMapper:
 
         for entry in tiploc_data:
             tiploc = (entry.get("TIPLOC") or "").strip()
-            crs = (entry.get("CRS") or "").strip()
+            crs = (entry.get("3ALPHA") or entry.get("CRS") or "").strip()
             name = (entry.get("NLCDESC") or "").strip()
-            nlc = (entry.get("NLC") or "").strip()
+            nlc = str(entry.get("NLC") or "").strip()
             stanox = (entry.get("STANOX") or "").strip()
 
             if not tiploc:
