@@ -6,7 +6,7 @@ This is the main business logic entry point that:
 3. Parses and filters CIF schedules
 4. Applies STP overlays per date
 5. Enriches via Darwin
-6. Builds route patterns
+6. Builds route patterns with auto-generated variant names
 7. Generates all CSV outputs
 """
 
@@ -35,6 +35,8 @@ from backend.app.services.darwin_enricher import DarwinEnricher
 from backend.app.services.mileage_resolver import MileageResolver
 from backend.app.services.route_builder import (
     build_route_rows,
+    extract_stopping_pattern,
+    generate_variant_names,
     identify_unique_routes,
 )
 from backend.app.services.schedule_validator import (
@@ -72,7 +74,6 @@ class Orchestrator:
         date_start: date,
         date_end: date,
         train_route: str,
-        route_variant: str,
     ) -> GenerationResult:
         """Run the full generation pipeline.
 
@@ -144,8 +145,6 @@ class Orchestrator:
         # --- Step 3: Expand dates and apply STP overlays ---
         dates = expand_date_range(date_start, date_end)
         total_services = 0
-        darwin_success = 0
-        darwin_attempts = 0
 
         all_effective_schedules: list[tuple[date, list]] = []
 
@@ -163,9 +162,33 @@ class Orchestrator:
             departures_found=0,  # Updated below
         )
 
-        # --- Step 4: Generate timetable rows ---
+        # --- Step 4: Collect schedules that depart from the requested station ---
+        all_effective_flat: list = []
+        for _, effective in all_effective_schedules:
+            for schedule in effective:
+                if get_departure_at_station(schedule, tiploc):
+                    all_effective_flat.append(schedule)
+
+        # --- Step 5: Build route patterns and assign variant names ---
+        # Must happen before timetable rows so each row can reference its variant.
+        unique_routes = identify_unique_routes(all_effective_flat, self._corpus)
+        pattern_to_variant = generate_variant_names(unique_routes, self._corpus)
+
+        for pattern, representative_schedule in unique_routes.items():
+            variant_name = pattern_to_variant[pattern]
+            route_rows = build_route_rows(
+                representative_schedule,
+                variant_name,
+                self._corpus,
+                self._mileage,
+                self._audit,
+            )
+            result.route_rows.extend(route_rows)
+
+        # --- Step 6: Generate timetable rows ---
         departures_found = 0
-        all_effective_flat = []
+        darwin_success = 0
+        darwin_attempts = 0
 
         for d, effective in all_effective_schedules:
             for schedule in effective:
@@ -176,6 +199,10 @@ class Orchestrator:
                 departures_found += 1
                 dep_minutes = parse_cif_time(dep_time_raw)
                 dep_formatted = minutes_to_hhmmss(dep_minutes)
+
+                # Look up route_variant for this schedule's stopping pattern
+                pattern = extract_stopping_pattern(schedule, self._corpus)
+                variant_name = pattern_to_variant.get(pattern, "")
 
                 # Darwin enrichment
                 darwin_attempts += 1
@@ -195,6 +222,7 @@ class Orchestrator:
                     date=d.isoformat(),
                     departure_time=dep_formatted,
                     train_route=train_route,
+                    route_variant=variant_name,
                     train_class=train_class,
                     number_of_coaches=coaches,
                 ))
@@ -217,28 +245,13 @@ class Orchestrator:
                     mileage_status="",  # Populated during route build
                 ))
 
-                all_effective_flat.append(schedule)
-
         if not departures_found:
             result.warnings.append(
                 f"No departures found at station '{tiploc}' ({crs}) for the "
                 f"selected dates and operator. The station may only be an arrival point."
             )
 
-        # --- Step 5: Build route patterns ---
-        unique_routes = identify_unique_routes(all_effective_flat, self._corpus)
-
-        for pattern, representative_schedule in unique_routes.items():
-            route_rows = build_route_rows(
-                representative_schedule,
-                route_variant,
-                self._corpus,
-                self._mileage,
-                self._audit,
-            )
-            result.route_rows.extend(route_rows)
-
-        # --- Step 6: Warnings for missing data ---
+        # --- Step 7: Warnings for missing data ---
         missing_mileage = sum(1 for r in result.route_rows if not r.distance_miles)
         if missing_mileage:
             result.warnings.append(

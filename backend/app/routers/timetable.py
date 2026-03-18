@@ -37,7 +37,6 @@ class ValidateRequest(BaseModel):
     date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     train_route: str = Field(..., min_length=1, max_length=200)
-    route_variant: str = Field(..., min_length=1, max_length=200)
 
 
 class GenerateRequest(BaseModel):
@@ -46,7 +45,6 @@ class GenerateRequest(BaseModel):
     date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     train_route: str = Field(..., min_length=1, max_length=200)
-    route_variant: str = Field(..., min_length=1, max_length=200)
 
 
 @router.post("/validate")
@@ -76,11 +74,6 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
     except ValidationError as e:
         errors.append({"field": e.field, "message": e.message})
 
-    try:
-        validate_route_name(req.route_variant, "route_variant")
-    except ValidationError as e:
-        errors.append({"field": e.field, "message": e.message})
-
     if errors:
         return JSONResponse(
             status_code=422,
@@ -105,7 +98,6 @@ async def generate_csv(req: GenerateRequest, request: Request) -> JSONResponse:
         if req.date_end:
             validate_date_range(req.date_start, req.date_end)
         train_route = validate_route_name(req.train_route, "train_route")
-        route_variant = validate_route_name(req.route_variant, "route_variant")
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"{e.field}: {e.message}")
 
@@ -119,7 +111,6 @@ async def generate_csv(req: GenerateRequest, request: Request) -> JSONResponse:
         date_start=start_date,
         date_end=end_date,
         train_route=train_route,
-        route_variant=route_variant,
     )
 
     # Generate CSVs
@@ -159,6 +150,7 @@ async def generate_csv(req: GenerateRequest, request: Request) -> JSONResponse:
                 "date": r.date,
                 "departure_time": r.departure_time,
                 "train_route": r.train_route,
+                "route_variant": r.route_variant,
                 "train_class": r.train_class,
                 "number_of_coaches": r.number_of_coaches,
             }

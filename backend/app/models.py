@@ -147,6 +147,7 @@ class TimetableRow:
     date: str          # YYYY-MM-DD
     departure_time: str  # HH:MM:SS
     train_route: str
+    route_variant: str   # auto-generated "Origin - Destination" key into route table
     train_class: str     # empty string if unavailable
     number_of_coaches: str  # empty string if unavailable
 

@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 def _get_station_display(tiploc: str, corpus: CorpusMapper) -> str:
-    """Get the best display name for a station: CRS if available, else TIPLOC."""
+    """Get the best display name for a station: full name, CRS fallback, then TIPLOC."""
+    name = corpus.tiploc_to_name(tiploc)
+    if name:
+        return name
     crs = corpus.tiploc_to_crs(tiploc)
     return crs if crs else tiploc
 
@@ -68,6 +71,41 @@ def identify_unique_routes(
     return unique
 
 
+def generate_variant_names(
+    unique_routes: dict[tuple[str, ...], CIFSchedule],
+    corpus: CorpusMapper,
+) -> dict[tuple[str, ...], str]:
+    """Generate a unique route_variant name for each stopping pattern.
+
+    Names are auto-generated as "Origin - Destination" using full station names.
+    If two distinct patterns share the same origin-destination pair, a numeric
+    suffix is appended: "Origin - Destination (2)", "Origin - Destination (3)".
+
+    Returns a dict mapping pattern tuples to their variant name strings.
+    """
+    base_name_counts: dict[str, int] = {}
+    pattern_to_variant: dict[tuple[str, ...], str] = {}
+
+    for pattern, schedule in unique_routes.items():
+        passenger_stops = [
+            loc for loc in schedule.passenger_stops
+            if corpus.is_passenger_station(loc.tiploc.upper())
+        ]
+        if not passenger_stops:
+            base = "Unknown Route"
+        else:
+            origin = _get_station_display(passenger_stops[0].tiploc.upper(), corpus)
+            dest = _get_station_display(passenger_stops[-1].tiploc.upper(), corpus)
+            base = f"{origin} - {dest}"
+
+        count = base_name_counts.get(base, 0) + 1
+        base_name_counts[base] = count
+        variant = base if count == 1 else f"{base} ({count})"
+        pattern_to_variant[pattern] = variant
+
+    return pattern_to_variant
+
+
 def build_route_rows(
     schedule: CIFSchedule,
     route_variant: str,
@@ -79,7 +117,7 @@ def build_route_rows(
 
     Creates ordered station pairs with:
     - seq (1..n)
-    - from_station, to_station (CRS codes)
+    - from_station, to_station (full station names)
     - distance_miles (from official mileage data)
     - run_min (departure A to arrival B)
     - wait_min (dwell time at from_station)
