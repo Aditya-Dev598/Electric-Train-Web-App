@@ -67,6 +67,17 @@ class CIFParser:
             logger.warning("CIF file not found: %s", file_path)
             return []
 
+        # Detect Git LFS pointer files (not the real CIF data)
+        with open(path, "r", encoding="utf-8", errors="replace") as _f:
+            first_line = _f.readline().rstrip()
+        if first_line.startswith("version https://git-lfs.github.com"):
+            logger.error(
+                "CIF file '%s' is a Git LFS pointer, not the actual timetable data. "
+                "Run 'git lfs pull' to download the real file.",
+                file_path,
+            )
+            return []
+
         self._file_path = file_path
         self._schedules = []
         self._total_records = 0

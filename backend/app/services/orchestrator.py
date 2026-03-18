@@ -117,10 +117,28 @@ class Orchestrator:
         filtered = filter_schedules(all_schedules, operator_code, tiploc)
 
         if not filtered:
-            result.warnings.append(
-                f"No CIF schedules found for operator '{operator_code}' at station "
-                f"'{tiploc}' ({crs}). Check operator code and CIF data."
-            )
+            if not all_schedules:
+                result.warnings.append(
+                    "No CIF data is loaded. Ensure CIF/MCA timetable files are present "
+                    f"in the configured CIF_DATA_PATH directory (currently: "
+                    f"'{self._cif.provenance.get('path', 'data/cif')}'). "
+                    "Download from Network Rail Datafeeds or Rail Data Marketplace."
+                )
+            else:
+                by_operator = filter_schedules(all_schedules, operator_code, None)
+                if not by_operator:
+                    known_ops = sorted({s.atoc_code for s in all_schedules if s.atoc_code})
+                    result.warnings.append(
+                        f"No CIF schedules found for operator '{operator_code}'. "
+                        f"Operators present in loaded CIF data: {', '.join(known_ops) or 'none'}. "
+                        "Check the operator ATOC code (e.g. SN=Southern, GX=Gatwick Express)."
+                    )
+                else:
+                    result.warnings.append(
+                        f"Operator '{operator_code}' has {len(by_operator)} schedule(s) in CIF "
+                        f"but none call at station '{tiploc}' ({crs}). "
+                        "Verify the station TIPLOC or CRS code is correct."
+                    )
             return result
 
         # --- Step 3: Expand dates and apply STP overlays ---
