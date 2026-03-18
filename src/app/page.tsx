@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useRef } from 'react';
 import './globals.css';
 import {
+  ValidateParams,
   GenerateParams,
   GenerationResult,
   ValidationResult,
@@ -14,14 +15,13 @@ import {
 } from '@/lib/api';
 
 export default function Home() {
-  const [form, setForm] = useState<GenerateParams>({
+  const [form, setForm] = useState<ValidateParams>({
     station_name: '',
     operator_code: '',
     date_start: '',
     date_end: '',
-    train_route: '',
-    route_variant: '',
   });
+  const [cifFile, setCifFile] = useState<File | null>(null);
 
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
@@ -29,7 +29,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [validating, setValidating] = useState(false);
 
-  const updateField = (field: keyof GenerateParams, value: string) => {
+  const updateField = (field: keyof ValidateParams, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
     setValidation(null);
     setError(null);
@@ -50,15 +50,20 @@ export default function Home() {
 
   const handleGenerate = async (e: FormEvent) => {
     e.preventDefault();
+    if (!cifFile) {
+      setError('Please select a CIF timetable file.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
 
     try {
-      const params = { ...form };
-      if (!params.date_end) {
-        delete params.date_end;
-      }
+      const params: GenerateParams = {
+        ...form,
+        date_end: form.date_end || undefined,
+        cif_file: cifFile,
+      };
       const res = await generateCSV(params);
       setResult(res);
     } catch (e) {
@@ -86,12 +91,32 @@ export default function Home() {
         <h2>Input Parameters</h2>
         <form onSubmit={handleGenerate}>
           <div className="form-grid">
+
+            <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+              <label htmlFor="cif_file">CIF Timetable File</label>
+              <input
+                id="cif_file"
+                type="file"
+                accept=".CIF,.cif,.MCA,.mca"
+                onChange={e => {
+                  setCifFile(e.target.files?.[0] ?? null);
+                  setValidation(null);
+                  setError(null);
+                }}
+                required
+              />
+              <span className="hint">
+                Network Rail CIF/MCA timetable file (e.g. toc-full.CIF). Download from
+                Rail Data Marketplace or Network Rail Datafeeds.
+              </span>
+            </div>
+
             <div className="form-group">
-              <label htmlFor="station_name">Station Name</label>
+              <label htmlFor="station_name">Station</label>
               <input
                 id="station_name"
                 type="text"
-                placeholder="e.g. KGX, WATRLMN, London Kings Cross"
+                placeholder="e.g. EPS, EPSM, Epsom"
                 value={form.station_name}
                 onChange={e => updateField('station_name', e.target.value)}
                 required
@@ -108,13 +133,13 @@ export default function Home() {
               <input
                 id="operator_code"
                 type="text"
-                placeholder="e.g. VT, SWR, GW"
+                placeholder="e.g. SN, VT, GX"
                 value={form.operator_code}
                 onChange={e => updateField('operator_code', e.target.value.toUpperCase())}
                 required
                 maxLength={3}
               />
-              <span className="hint">2-3 letter TOC/operator code</span>
+              <span className="hint">2–3 letter TOC code (SN=Southern, GX=Gatwick Express)</span>
               {getFieldError('operator_code') && (
                 <span className="error-text">{getFieldError('operator_code')}</span>
               )}
@@ -143,45 +168,12 @@ export default function Home() {
                 value={form.date_end}
                 onChange={e => updateField('date_end', e.target.value)}
               />
-              <span className="hint">Leave empty for single date. Max 31 day range.</span>
+              <span className="hint">Leave empty for a single date. Max 31-day range.</span>
               {getFieldError('date_range') && (
                 <span className="error-text">{getFieldError('date_range')}</span>
               )}
             </div>
 
-            <div className="form-group">
-              <label htmlFor="train_route">Train Route</label>
-              <input
-                id="train_route"
-                type="text"
-                placeholder="e.g. London-Edinburgh Main"
-                value={form.train_route}
-                onChange={e => updateField('train_route', e.target.value)}
-                required
-                maxLength={200}
-              />
-              <span className="hint">User-defined route name for CSV output</span>
-              {getFieldError('train_route') && (
-                <span className="error-text">{getFieldError('train_route')}</span>
-              )}
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="route_variant">Route Variant</label>
-              <input
-                id="route_variant"
-                type="text"
-                placeholder="e.g. Stopping, Express, Via-Peterborough"
-                value={form.route_variant}
-                onChange={e => updateField('route_variant', e.target.value)}
-                required
-                maxLength={200}
-              />
-              <span className="hint">User-defined variant label for route CSV</span>
-              {getFieldError('route_variant') && (
-                <span className="error-text">{getFieldError('route_variant')}</span>
-              )}
-            </div>
           </div>
 
           <div className="button-row">
@@ -197,7 +189,7 @@ export default function Home() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={loading || validating}
+              disabled={loading || validating || !cifFile}
             >
               {loading && <span className="loading-spinner" />}
               Generate CSV
@@ -340,19 +332,19 @@ export default function Home() {
                 <table>
                   <thead>
                     <tr>
+                      <th>Route</th>
                       <th>Date</th>
-                      <th>Departure Time</th>
-                      <th>Train Route</th>
-                      <th>Train Class</th>
+                      <th>Departure</th>
+                      <th>Class</th>
                       <th>Coaches</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.timetable_preview.map((row, i) => (
                       <tr key={i}>
+                        <td>{row.route_variant}</td>
                         <td>{row.date}</td>
                         <td>{row.departure_time}</td>
-                        <td>{row.train_route}</td>
                         <td>{row.train_class || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
                         <td>{row.number_of_coaches || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
                       </tr>

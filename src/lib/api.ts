@@ -17,7 +17,7 @@ export interface ValidationResult {
 export interface TimetablePreview {
   date: string;
   departure_time: string;
-  train_route: string;
+  route_variant: string;
   train_class: string;
   number_of_coaches: string;
 }
@@ -61,20 +61,27 @@ export interface GenerationResult {
   route_preview: RoutePreview[];
 }
 
-export interface GenerateParams {
+export interface ValidateParams {
   station_name: string;
   operator_code: string;
   date_start: string;
   date_end?: string;
-  train_route: string;
-  route_variant: string;
 }
 
-export async function validateInputs(params: GenerateParams): Promise<ValidationResult> {
+export interface GenerateParams extends ValidateParams {
+  cif_file: File;
+}
+
+export async function validateInputs(params: ValidateParams): Promise<ValidationResult> {
   const resp = await fetch(`${API_BASE}/api/validate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify({
+      station_name: params.station_name,
+      operator_code: params.operator_code,
+      date_start: params.date_start,
+      date_end: params.date_end || undefined,
+    }),
   });
 
   if (resp.status === 422) {
@@ -89,10 +96,18 @@ export async function validateInputs(params: GenerateParams): Promise<Validation
 }
 
 export async function generateCSV(params: GenerateParams): Promise<GenerationResult> {
+  const body = new FormData();
+  body.append('cif_file', params.cif_file);
+  body.append('station_name', params.station_name);
+  body.append('operator_code', params.operator_code);
+  body.append('date_start', params.date_start);
+  if (params.date_end) {
+    body.append('date_end', params.date_end);
+  }
+
   const resp = await fetch(`${API_BASE}/api/generate`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body,
   });
 
   if (!resp.ok) {
