@@ -1,0 +1,7 @@
+route_variant,seq,from_station,to_station,distance_miles,run_min,wait_min
+Stopping,1,EUS,WFJ,17.38,14,0
+Stopping,2,WFJ,MKC,28.75,18,2
+Stopping,3,MKC,RUG,34.62,23,1
+Stopping,4,RUG,COV,12.50,10,2
+Stopping,5,COV,BHI,8.75,8,1
+Stopping,6,BHI,BHM,5.25,6,1

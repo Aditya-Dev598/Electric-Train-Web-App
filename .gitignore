@@ -5,3 +5,9 @@ out/
 .env.local
 *.tsbuildinfo
 next-env.d.ts
+__pycache__/
+*.pyc
+.venv/
+output/
+*.egg-info/
+.pytest_cache/

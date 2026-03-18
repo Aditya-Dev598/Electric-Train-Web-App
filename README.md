@@ -1,42 +1,76 @@
-# UK Rail Timetable Generator - Frontend
+# UK Rail Timetable Generator
 
-Next.js frontend for the UK Rail Timetable Generator. Provides a web interface for generating timetable and route CSVs from official Network Rail data sources.
+Full-stack web application for generating railway timetable and route CSV outputs from **official UK rail data sources only**.
 
-## Features
+## Structure
 
-- Input form for station, operator, dates, route names
-- Input validation with server-side checks
-- CSV generation with download buttons
-- Results preview (timetable + route tables)
-- Source provenance display (CIF, CORPUS, mileage, Darwin)
-- Summary statistics and diagnostics
-- Warning display for missing data
+```
+Electric-Train-Web-App/
+├── backend/              # Python FastAPI API server
+│   ├── app/              # Application code
+│   ├── tests/            # 133 tests (unit + integration)
+│   ├── data/sample/      # Sample CSV outputs
+│   ├── requirements.txt
+│   └── .env.example
+├── src/                  # Next.js frontend
+│   ├── app/
+│   └── lib/
+├── package.json
+└── pyproject.toml
+```
 
-## Setup
+## Data Sources
+
+| Source | Used For |
+|--------|----------|
+| **Network Rail CIF** | All timetable/schedule data, STP overlays |
+| **Network Rail CORPUS** | Station name ↔ CRS ↔ TIPLOC mapping |
+| **Network Rail NESA** | Official rail mileage (miles and chains) |
+| **Darwin OpenLDBWS** | train_class and number_of_coaches only |
+
+## Quick Start
+
+### Backend
 
 ```bash
-# Install dependencies
+# Install Python dependencies
+pip install -r backend/requirements.txt
+
+# Configure
+cp backend/.env.example backend/.env
+# Edit backend/.env with your data paths and Darwin API token
+
+# Place data files:
+#   backend/data/cif/          ← CIF/MCA timetable files
+#   backend/data/corpus/CORPUSExtract.json
+#   backend/data/mileage/mileage.json
+
+# Start API server
+uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+API docs: `http://localhost:8000/api/docs`
+
+### Frontend
+
+```bash
 npm install
-
-# Configure backend URL
-cp .env.example .env.local
-# Edit .env.local if backend is not on localhost:8000
-
-# Run development server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open `http://localhost:3000`
 
-## Requirements
+## Running Tests
 
-- Node.js 18+
-- Backend API running (see Train-Timetable-Scrapping-Tool/backend)
+```bash
+pip install -r backend/requirements-dev.txt
+python -m pytest backend/tests/ -v
+```
 
-## Architecture
+## Documentation
 
-- Next.js 14 with App Router
-- TypeScript
-- API client in `src/lib/api.ts`
-- Single-page app in `src/app/page.tsx`
-- API requests proxied to backend via Next.js rewrites
+- [Backend README](backend/README.md)
+- [Architecture Summary](backend/ARCHITECTURE.md)
+- [Source-to-Field Mapping](backend/SOURCE_MAPPING.md)
+- [CIF-Darwin Matching Strategy](backend/CIF_DARWIN_MATCHING.md)
+- [Security Report](backend/SECURITY_REPORT.md)

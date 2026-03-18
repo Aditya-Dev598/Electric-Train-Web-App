@@ -1,0 +1,266 @@
+"""Orchestrator service: coordinates all modules to generate timetable and route CSVs.
+
+This is the main business logic entry point that:
+1. Validates inputs
+2. Resolves station via CORPUS
+3. Parses and filters CIF schedules
+4. Applies STP overlays per date
+5. Enriches via Darwin
+6. Builds route patterns
+7. Generates all CSV outputs
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date
+from typing import Optional
+
+from backend.app.models import (
+    DebugRow,
+    GenerationResult,
+    MatchConfidence,
+    RouteRow,
+    TimetableRow,
+)
+from backend.app.services.audit_logger import AuditLogger
+from backend.app.services.cif_parser import CIFParser
+from backend.app.services.corpus_mapper import CorpusMapper
+from backend.app.services.csv_exporter import (
+    generate_debug_csv,
+    generate_route_csv,
+    generate_timetable_csv,
+)
+from backend.app.services.darwin_enricher import DarwinEnricher
+from backend.app.services.mileage_resolver import MileageResolver
+from backend.app.services.route_builder import (
+    build_route_rows,
+    identify_unique_routes,
+)
+from backend.app.services.schedule_validator import (
+    apply_stp_overlays,
+    expand_date_range,
+    filter_schedules,
+    get_departure_at_station,
+)
+from backend.app.utils.time_utils import minutes_to_hhmmss, parse_cif_time
+
+logger = logging.getLogger(__name__)
+
+
+class Orchestrator:
+    """Coordinates the full timetable/route generation pipeline."""
+
+    def __init__(
+        self,
+        corpus: CorpusMapper,
+        cif_parser: CIFParser,
+        mileage: MileageResolver,
+        darwin: DarwinEnricher,
+        audit: AuditLogger,
+    ) -> None:
+        self._corpus = corpus
+        self._cif = cif_parser
+        self._mileage = mileage
+        self._darwin = darwin
+        self._audit = audit
+
+    def generate(
+        self,
+        station_name: str,
+        operator_code: str,
+        date_start: date,
+        date_end: date,
+        train_route: str,
+        route_variant: str,
+    ) -> GenerationResult:
+        """Run the full generation pipeline.
+
+        Returns a GenerationResult with timetable rows, route rows,
+        debug rows, warnings, provenance, and summary statistics.
+        """
+        result = GenerationResult()
+        result.provenance = {
+            "cif": self._cif.provenance,
+            "corpus": self._corpus.provenance,
+            "mileage": self._mileage.provenance,
+        }
+
+        # --- Step 1: CORPUS lookup ---
+        station_mappings = self._corpus.resolve_station(station_name)
+        if not station_mappings:
+            result.warnings.append(
+                f"Station '{station_name}' not found in CORPUS (exact match only). "
+                "Try using CRS code (e.g. KGX) or TIPLOC."
+            )
+            self._audit.log_corpus_lookup(station_name, None, None, False)
+            return result
+
+        # Use first match (exact match guarantees specificity)
+        station = station_mappings[0]
+        if len(station_mappings) > 1:
+            result.warnings.append(
+                f"Multiple stations matched '{station_name}': "
+                f"{', '.join(m.crs_code or m.tiploc for m in station_mappings)}. "
+                f"Using first match: {station.crs_code or station.tiploc}."
+            )
+
+        self._audit.log_corpus_lookup(
+            station_name, station.crs_code, station.tiploc, True,
+        )
+
+        tiploc = station.tiploc.upper()
+        crs = station.crs_code.upper() if station.crs_code else ""
+
+        # --- Step 2: Filter CIF schedules ---
+        all_schedules = self._cif.schedules
+        filtered = filter_schedules(all_schedules, operator_code, tiploc)
+
+        if not filtered:
+            result.warnings.append(
+                f"No CIF schedules found for operator '{operator_code}' at station "
+                f"'{tiploc}' ({crs}). Check operator code and CIF data."
+            )
+            return result
+
+        # --- Step 3: Expand dates and apply STP overlays ---
+        dates = expand_date_range(date_start, date_end)
+        total_services = 0
+        darwin_success = 0
+        darwin_attempts = 0
+
+        all_effective_schedules: list[tuple[date, list]] = []
+
+        for d in dates:
+            effective = apply_stp_overlays(filtered, d)
+            all_effective_schedules.append((d, effective))
+            total_services += len(effective)
+
+        self._audit.log_cif_filter(
+            operator=operator_code,
+            station_tiploc=tiploc,
+            date_range=f"{date_start.isoformat()} to {date_end.isoformat()}",
+            total_schedules=len(all_schedules),
+            after_stp=total_services,
+            departures_found=0,  # Updated below
+        )
+
+        # --- Step 4: Generate timetable rows ---
+        departures_found = 0
+        all_effective_flat = []
+
+        for d, effective in all_effective_schedules:
+            for schedule in effective:
+                dep_time_raw = get_departure_at_station(schedule, tiploc)
+                if not dep_time_raw:
+                    continue
+
+                departures_found += 1
+                dep_minutes = parse_cif_time(dep_time_raw)
+                dep_formatted = minutes_to_hhmmss(dep_minutes)
+
+                # Darwin enrichment
+                darwin_attempts += 1
+                darwin_match = self._darwin.enrich_schedule(schedule, d, crs)
+
+                train_class = ""
+                coaches = ""
+
+                if darwin_match.confidence in (MatchConfidence.EXACT, MatchConfidence.HIGH):
+                    darwin_success += 1
+                    if darwin_match.train_class:
+                        train_class = darwin_match.train_class
+                    if darwin_match.number_of_coaches is not None:
+                        coaches = str(darwin_match.number_of_coaches)
+
+                result.timetable_rows.append(TimetableRow(
+                    date=d.isoformat(),
+                    departure_time=dep_formatted,
+                    train_route=train_route,
+                    train_class=train_class,
+                    number_of_coaches=coaches,
+                ))
+
+                # Debug row
+                origin = schedule.origin
+                result.debug_rows.append(DebugRow(
+                    service_date=d.isoformat(),
+                    train_uid=schedule.train_uid,
+                    stp_indicator=schedule.stp_indicator.value,
+                    headcode=schedule.train_identity,
+                    origin_tiploc=origin.tiploc if origin else "",
+                    origin_departure=dep_time_raw,
+                    darwin_rid=darwin_match.darwin_rid or "",
+                    matching_method=darwin_match.matching_method,
+                    confidence=darwin_match.confidence.value,
+                    train_class=train_class,
+                    number_of_coaches=coaches,
+                    failure_reason=darwin_match.failure_reason or "",
+                    mileage_status="",  # Populated during route build
+                ))
+
+                all_effective_flat.append(schedule)
+
+        if not departures_found:
+            result.warnings.append(
+                f"No departures found at station '{tiploc}' ({crs}) for the "
+                f"selected dates and operator. The station may only be an arrival point."
+            )
+
+        # --- Step 5: Build route patterns ---
+        unique_routes = identify_unique_routes(all_effective_flat, self._corpus)
+
+        for pattern, representative_schedule in unique_routes.items():
+            route_rows = build_route_rows(
+                representative_schedule,
+                route_variant,
+                self._corpus,
+                self._mileage,
+                self._audit,
+            )
+            result.route_rows.extend(route_rows)
+
+        # --- Step 6: Warnings for missing data ---
+        missing_mileage = sum(1 for r in result.route_rows if not r.distance_miles)
+        if missing_mileage:
+            result.warnings.append(
+                f"{missing_mileage} route segment(s) have no mileage data. "
+                "Official NESA mileage data may not cover these segments."
+            )
+
+        if darwin_attempts > 0 and darwin_success == 0 and self._darwin.is_enabled:
+            result.warnings.append(
+                "Darwin enrichment failed for all services. "
+                "train_class and number_of_coaches will be empty."
+            )
+        elif not self._darwin.is_enabled:
+            result.warnings.append(
+                "Darwin API token not configured. "
+                "train_class and number_of_coaches fields will be empty."
+            )
+
+        # --- Summary ---
+        result.summary = {
+            "total_services_processed": total_services,
+            "timetable_rows_generated": len(result.timetable_rows),
+            "unique_route_patterns": len(unique_routes),
+            "darwin_enrichment_success_pct": (
+                round(darwin_success / darwin_attempts * 100, 1)
+                if darwin_attempts > 0
+                else 0.0
+            ),
+            "darwin_attempts": darwin_attempts,
+            "darwin_successes": darwin_success,
+            "missing_mileage_count": missing_mileage,
+            "dates_in_range": len(dates),
+            "departures_found": departures_found,
+        }
+
+        logger.info(
+            "Generation complete: %d timetable rows, %d route rows, %d warnings",
+            len(result.timetable_rows),
+            len(result.route_rows),
+            len(result.warnings),
+        )
+
+        return result

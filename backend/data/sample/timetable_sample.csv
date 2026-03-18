@@ -1,0 +1,8 @@
+date,departure_time,train_route,train_class,number_of_coaches
+2026-03-15,06:30:00,London-Birmingham Stopping,Standard,9
+2026-03-15,07:00:00,London-Birmingham Stopping,,
+2026-03-15,07:30:00,London-Birmingham Stopping,First,11
+2026-03-15,08:00:00,London-Birmingham Stopping,,
+2026-03-15,08:30:00,London-Birmingham Stopping,Standard,9
+2026-03-15,09:00:00,London-Birmingham Stopping,,
+2026-03-15,09:30:00,London-Birmingham Stopping,Standard,11
