@@ -140,6 +140,19 @@ class TestGetDepartureAtStation:
         dep = get_departure_at_station(sched, "UNKNOWN")
         assert dep is None
 
+    def test_pass_through_returns_none(self):
+        """Pass-through LI records (no public times, no T/D/U activity) must not produce a departure."""
+        locations = [
+            CIFLocation(record_type="LO", tiploc="WOKING", scheduled_departure="0836", public_departure="0836"),
+            # Pass-through: only sched_pass, no public times, no stop activity
+            CIFLocation(record_type="LI", tiploc="FARNBRG", scheduled_arrival="0845", scheduled_departure="0845",
+                        activity="   "),
+            CIFLocation(record_type="LT", tiploc="BASNGSK", scheduled_arrival="0900", public_arrival="0900"),
+        ]
+        sched = _make_schedule(locations=locations)
+        dep = get_departure_at_station(sched, "FARNBRG")
+        assert dep is None  # Pass-through, not a passenger stop
+
 
 class TestExpandDateRange:
     def test_single_day(self):

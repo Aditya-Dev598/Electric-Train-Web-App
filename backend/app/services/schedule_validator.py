@@ -132,6 +132,8 @@ def get_departure_at_station(
     tiploc = station_tiploc.strip().upper()
     for loc in schedule.locations:
         if loc.tiploc.upper() == tiploc:
+            if not loc.is_passenger_stop:
+                return None
             dep = loc.departure_time_str
             if dep:
                 return dep
