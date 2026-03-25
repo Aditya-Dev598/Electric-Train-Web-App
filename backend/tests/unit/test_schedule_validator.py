@@ -10,6 +10,7 @@ from backend.app.services.schedule_validator import (
     expand_date_range,
     filter_schedules,
     get_departure_at_station,
+    get_stop_type_at_station,
     schedule_runs_on_date,
 )
 
@@ -140,8 +141,8 @@ class TestGetDepartureAtStation:
         dep = get_departure_at_station(sched, "UNKNOWN")
         assert dep is None
 
-    def test_pass_through_returns_none(self):
-        """Pass-through LI records (no public times, no T/D/U activity) must not produce a departure."""
+    def test_pass_through_returns_pass_time(self):
+        """Pass-through LI records return their scheduled pass time as the departure."""
         locations = [
             CIFLocation(record_type="LO", tiploc="WOKING", scheduled_departure="0836", public_departure="0836"),
             # Pass-through: only sched_pass, no public times, no stop activity
@@ -151,7 +152,38 @@ class TestGetDepartureAtStation:
         ]
         sched = _make_schedule(locations=locations)
         dep = get_departure_at_station(sched, "FARNBRG")
-        assert dep is None  # Pass-through, not a passenger stop
+        assert dep == "0845"  # Pass time is returned
+
+
+class TestGetStopTypeAtStation:
+    def _make_pass_through_schedule(self):
+        locations = [
+            CIFLocation(record_type="LO", tiploc="WOKING", scheduled_departure="0836", public_departure="0836"),
+            CIFLocation(record_type="LI", tiploc="FARNBRG", scheduled_arrival="0845", scheduled_departure="0845",
+                        activity="   "),
+            CIFLocation(record_type="LT", tiploc="BASNGSK", scheduled_arrival="0900", public_arrival="0900"),
+        ]
+        return _make_schedule(locations=locations)
+
+    def test_origin_is_stop(self):
+        sched = _make_schedule()
+        assert get_stop_type_at_station(sched, "EUSTON") == "stop"
+
+    def test_intermediate_stop_is_stop(self):
+        sched = _make_schedule()
+        assert get_stop_type_at_station(sched, "RUGBY") == "stop"
+
+    def test_terminus_is_stop(self):
+        sched = _make_schedule()
+        assert get_stop_type_at_station(sched, "BHAMNWS") == "stop"
+
+    def test_pass_through_is_pass(self):
+        sched = self._make_pass_through_schedule()
+        assert get_stop_type_at_station(sched, "FARNBRG") == "pass"
+
+    def test_unknown_station_is_none(self):
+        sched = _make_schedule()
+        assert get_stop_type_at_station(sched, "UNKNOWN") is None
 
 
 class TestExpandDateRange:

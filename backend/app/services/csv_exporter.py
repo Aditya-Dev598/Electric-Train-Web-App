@@ -43,16 +43,17 @@ def _sanitize_row(row: dict[str, str]) -> dict[str, str]:
 def generate_timetable_csv(rows: list[TimetableRow]) -> str:
     """Generate the timetable CSV string.
 
-    Fields: route_variant, date, departure_time, train_class, number_of_coaches
+    Fields: route_variant, stop_type, date, departure_time, train_class, number_of_coaches
     """
     output = io.StringIO()
-    fieldnames = ["route_variant", "date", "departure_time", "train_class", "number_of_coaches"]
+    fieldnames = ["route_variant", "stop_type", "date", "departure_time", "train_class", "number_of_coaches"]
     writer = csv.DictWriter(output, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
     writer.writeheader()
 
     for row in rows:
         writer.writerow(_sanitize_row({
             "route_variant": row.route_variant,
+            "stop_type": row.stop_type,
             "date": row.date,
             "departure_time": row.departure_time,
             "train_class": row.train_class,
@@ -65,11 +66,11 @@ def generate_timetable_csv(rows: list[TimetableRow]) -> str:
 def generate_route_csv(rows: list[RouteRow]) -> str:
     """Generate the route CSV string.
 
-    Fields: route_variant, seq, from_station, to_station, distance_miles, run_min, wait_min
+    Fields: route_variant, seq, from_station, to_station, stop_type, distance_miles, run_min, wait_min
     """
     output = io.StringIO()
     fieldnames = ["route_variant", "seq", "from_station", "to_station",
-                  "distance_miles", "run_min", "wait_min"]
+                  "stop_type", "distance_miles", "run_min", "wait_min"]
     writer = csv.DictWriter(output, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
     writer.writeheader()
 
@@ -79,6 +80,7 @@ def generate_route_csv(rows: list[RouteRow]) -> str:
             "seq": str(row.seq),
             "from_station": row.from_station,
             "to_station": row.to_station,
+            "stop_type": row.stop_type,
             "distance_miles": row.distance_miles,
             "run_min": row.run_min,
             "wait_min": row.wait_min,

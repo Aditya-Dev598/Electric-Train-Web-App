@@ -49,16 +49,16 @@ class TestGenerateTimetableCSV:
             TimetableRow(
                 date="2026-03-15",
                 departure_time="08:30:00",
-                train_route="TestRoute",
+                route_variant="TestRoute",
+                stop_type="stop",
                 train_class="Standard",
                 number_of_coaches="8",
             ),
             TimetableRow(
                 date="2026-03-15",
                 departure_time="09:00:00",
-                train_route="TestRoute",
-                train_class="",
-                number_of_coaches="",
+                route_variant="TestRoute",
+                stop_type="pass",
             ),
         ]
         csv = generate_timetable_csv(rows)
@@ -66,15 +66,14 @@ class TestGenerateTimetableCSV:
         assert len(lines) == 3  # Header + 2 rows
         assert "2026-03-15" in lines[1]
         assert "08:30:00" in lines[1]
+        assert "stop_type" in lines[0]
 
     def test_injection_protection(self):
         rows = [
             TimetableRow(
                 date="2026-03-15",
                 departure_time="08:30:00",
-                train_route="=HYPERLINK()",
-                train_class="",
-                number_of_coaches="",
+                route_variant="=HYPERLINK()",
             ),
         ]
         csv = generate_timetable_csv(rows)
@@ -94,6 +93,7 @@ class TestGenerateRouteCSV:
                 seq=1,
                 from_station="KGX",
                 to_station="PBO",
+                stop_type="stop",
                 distance_miles="76.42",
                 run_min="47",
                 wait_min="0",
@@ -104,3 +104,4 @@ class TestGenerateRouteCSV:
         assert len(lines) == 2
         assert "KGX" in lines[1]
         assert "76.42" in lines[1]
+        assert "stop_type" in lines[0]

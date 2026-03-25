@@ -132,11 +132,25 @@ def get_departure_at_station(
     tiploc = station_tiploc.strip().upper()
     for loc in schedule.locations:
         if loc.tiploc.upper() == tiploc:
-            if not loc.is_passenger_stop:
-                return None
             dep = loc.departure_time_str
             if dep:
                 return dep
+    return None
+
+
+def get_stop_type_at_station(
+    schedule: CIFSchedule,
+    station_tiploc: str,
+) -> Optional[str]:
+    """Return 'stop' or 'pass' for a station in a schedule, or None if not found.
+
+    'stop'  — the train calls at this station (LO/LT, or LI with public times/activity).
+    'pass'  — the train passes through without stopping (LI with only a pass time).
+    """
+    tiploc = station_tiploc.strip().upper()
+    for loc in schedule.locations:
+        if loc.tiploc.upper() == tiploc:
+            return "stop" if loc.is_passenger_stop else "pass"
     return None
 
 

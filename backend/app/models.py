@@ -147,8 +147,9 @@ class TimetableRow:
     date: str          # YYYY-MM-DD
     departure_time: str  # HH:MM:SS
     route_variant: str   # auto-generated "Origin - Destination" key into route table
-    train_class: str     # empty string if unavailable
-    number_of_coaches: str  # empty string if unavailable
+    stop_type: str = "stop"  # "stop" = calls here, "pass" = passes through without stopping
+    train_class: str = ""    # empty string if unavailable
+    number_of_coaches: str = ""  # empty string if unavailable
 
 
 @dataclass
@@ -158,6 +159,7 @@ class RouteRow:
     seq: int
     from_station: str
     to_station: str
+    stop_type: str        # "stop" = from_station is a calling point, "pass" = pass-through
     distance_miles: str   # decimal string or empty
     run_min: str          # integer string or empty
     wait_min: str         # integer string

@@ -44,6 +44,7 @@ from backend.app.services.schedule_validator import (
     expand_date_range,
     filter_schedules,
     get_departure_at_station,
+    get_stop_type_at_station,
 )
 from backend.app.utils.time_utils import minutes_to_hhmmss, parse_cif_time
 
@@ -161,7 +162,7 @@ class Orchestrator:
             departures_found=0,  # Updated below
         )
 
-        # --- Step 4: Collect schedules that depart from the requested station ---
+        # --- Step 4: Collect schedules that have a time at the requested station ---
         all_effective_flat: list = []
         for _, effective in all_effective_schedules:
             for schedule in effective:
@@ -170,7 +171,7 @@ class Orchestrator:
 
         # --- Step 5: Build route patterns and assign variant names ---
         # Must happen before timetable rows so each row can reference its variant.
-        unique_routes = identify_unique_routes(all_effective_flat, self._corpus)
+        unique_routes = identify_unique_routes(all_effective_flat, self._corpus, tiploc)
         pattern_to_variant = generate_variant_names(unique_routes, self._corpus)
 
         for pattern, representative_schedule in unique_routes.items():
@@ -181,6 +182,7 @@ class Orchestrator:
                 self._corpus,
                 self._mileage,
                 self._audit,
+                focus_tiploc=tiploc,
             )
             result.route_rows.extend(route_rows)
 
@@ -200,7 +202,7 @@ class Orchestrator:
                 dep_formatted = minutes_to_hhmmss(dep_minutes)
 
                 # Look up route_variant for this schedule's stopping pattern
-                pattern = extract_stopping_pattern(schedule, self._corpus)
+                pattern = extract_stopping_pattern(schedule, self._corpus, tiploc)
                 variant_name = pattern_to_variant.get(pattern, "")
 
                 # Darwin enrichment
@@ -217,10 +219,13 @@ class Orchestrator:
                     if darwin_match.number_of_coaches is not None:
                         coaches = str(darwin_match.number_of_coaches)
 
+                stop_type = get_stop_type_at_station(schedule, tiploc) or "stop"
+
                 result.timetable_rows.append(TimetableRow(
                     date=d.isoformat(),
                     departure_time=dep_formatted,
                     route_variant=variant_name,
+                    stop_type=stop_type,
                     train_class=train_class,
                     number_of_coaches=coaches,
                 ))

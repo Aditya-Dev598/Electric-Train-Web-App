@@ -35,16 +35,21 @@ def _get_station_display(tiploc: str, corpus: CorpusMapper) -> str:
 def extract_stopping_pattern(
     schedule: CIFSchedule,
     corpus: CorpusMapper,
+    focus_tiploc: Optional[str] = None,
 ) -> tuple[str, ...]:
     """Extract the ordered tuple of passenger station CRS codes for a schedule.
 
-    Only includes stations that are passenger stops (have CRS codes).
+    Only includes stations that are passenger stops (have CRS codes), plus
+    focus_tiploc unconditionally (even if a pass-through) so pass-through
+    variants are distinct patterns from stopping variants.
     Returns a tuple suitable for use as a dict key for deduplication.
     """
+    focus = focus_tiploc.strip().upper() if focus_tiploc else None
     pattern = []
-    for loc in schedule.passenger_stops:
+    for loc in schedule.locations:
         tiploc = loc.tiploc.upper()
-        if corpus.is_passenger_station(tiploc):
+        is_focus = focus and tiploc == focus
+        if is_focus or (loc.is_passenger_stop and corpus.is_passenger_station(tiploc)):
             crs = corpus.tiploc_to_crs(tiploc) or tiploc
             pattern.append(crs)
     return tuple(pattern)
@@ -53,6 +58,7 @@ def extract_stopping_pattern(
 def identify_unique_routes(
     schedules: list[CIFSchedule],
     corpus: CorpusMapper,
+    focus_tiploc: Optional[str] = None,
 ) -> dict[tuple[str, ...], CIFSchedule]:
     """Identify unique stopping patterns from a list of schedules.
 
@@ -62,7 +68,7 @@ def identify_unique_routes(
     unique: dict[tuple[str, ...], CIFSchedule] = {}
 
     for schedule in schedules:
-        pattern = extract_stopping_pattern(schedule, corpus)
+        pattern = extract_stopping_pattern(schedule, corpus, focus_tiploc)
         if len(pattern) >= 2 and pattern not in unique:
             unique[pattern] = schedule
 
@@ -112,35 +118,52 @@ def build_route_rows(
     corpus: CorpusMapper,
     mileage: MileageResolver,
     audit: AuditLogger,
+    focus_tiploc: Optional[str] = None,
 ) -> list[RouteRow]:
     """Build route CSV rows for a single schedule's stopping pattern.
 
     Creates ordered station pairs with:
     - seq (1..n)
     - from_station, to_station (full station names)
+    - stop_type ("stop" = from_station is a calling point, "pass" = pass-through)
     - distance_miles (from official mileage data)
     - run_min (departure A to arrival B)
-    - wait_min (dwell time at from_station)
-    """
-    passenger_stops = [
-        loc for loc in schedule.passenger_stops
-        if corpus.is_passenger_station(loc.tiploc.upper())
-    ]
+    - wait_min (dwell time at from_station; 0 for pass-throughs)
 
-    if len(passenger_stops) < 2:
+    focus_tiploc is always included even if it is a pass-through on this service,
+    splitting the containing segment into two rows.
+    """
+    focus = focus_tiploc.strip().upper() if focus_tiploc else None
+
+    # Build ordered list: passenger stops + focus station (at its natural position)
+    included = []
+    for loc in schedule.locations:
+        t = loc.tiploc.upper()
+        is_focus = focus and t == focus
+        if is_focus or (loc.is_passenger_stop and corpus.is_passenger_station(t)):
+            included.append(loc)
+
+    if len(included) < 2:
         return []
 
     rows: list[RouteRow] = []
 
-    for i in range(len(passenger_stops) - 1):
-        from_loc = passenger_stops[i]
-        to_loc = passenger_stops[i + 1]
+    for i in range(len(included) - 1):
+        from_loc = included[i]
+        to_loc = included[i + 1]
 
         from_tiploc = from_loc.tiploc.upper()
         to_tiploc = to_loc.tiploc.upper()
 
         from_station = _get_station_display(from_tiploc, corpus)
         to_station = _get_station_display(to_tiploc, corpus)
+
+        # stop_type: "pass" if from_station is the focus pass-through, else "stop"
+        stop_type = (
+            "pass"
+            if focus and from_tiploc == focus and not from_loc.is_passenger_stop
+            else "stop"
+        )
 
         # Distance
         dist, method = mileage.get_distance_with_method(from_tiploc, to_tiploc)
@@ -157,17 +180,21 @@ def build_route_rows(
         run = calculate_run_minutes(dep_a, arr_b)
         run_str = str(run) if run is not None else ""
 
-        # Wait time: dwell at from_station (departure - arrival)
-        arr_a = parse_cif_time(from_loc.arrival_time_str)
-        dep_a_full = parse_cif_time(from_loc.departure_time_str)
-        wait = calculate_wait_minutes(arr_a, dep_a_full)
-        wait_str = str(wait)
+        # Wait time: 0 for pass-throughs, normal dwell for stops
+        if stop_type == "pass":
+            wait_str = "0"
+        else:
+            arr_a = parse_cif_time(from_loc.arrival_time_str)
+            dep_a_full = parse_cif_time(from_loc.departure_time_str)
+            wait = calculate_wait_minutes(arr_a, dep_a_full)
+            wait_str = str(wait)
 
         rows.append(RouteRow(
             route_variant=route_variant,
             seq=i + 1,
             from_station=from_station,
             to_station=to_station,
+            stop_type=stop_type,
             distance_miles=distance_str,
             run_min=run_str,
             wait_min=wait_str,
