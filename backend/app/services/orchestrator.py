@@ -162,11 +162,16 @@ class Orchestrator:
             departures_found=0,  # Updated below
         )
 
-        # --- Step 4: Collect schedules that have a time at the requested station ---
+        # --- Step 4: Collect unique schedules that have a time at the requested station ---
+        # Deduplicate by (train_uid, stp_indicator, date_runs_from) so the same schedule
+        # isn't processed multiple times across dates (once per date it runs).
         all_effective_flat: list = []
+        _seen_schedules: set = set()
         for _, effective in all_effective_schedules:
             for schedule in effective:
-                if get_departure_at_station(schedule, tiploc):
+                key = (schedule.train_uid, schedule.stp_indicator, schedule.date_runs_from)
+                if key not in _seen_schedules and get_departure_at_station(schedule, tiploc):
+                    _seen_schedules.add(key)
                     all_effective_flat.append(schedule)
 
         # --- Step 5: Build route patterns and assign variant names ---
@@ -253,6 +258,9 @@ class Orchestrator:
                 f"No departures found at station '{tiploc}' ({crs}) for the "
                 f"selected dates and operator. The station may only be an arrival point."
             )
+
+        # Sort timetable rows chronologically: date first, then departure time within each date
+        result.timetable_rows.sort(key=lambda r: (r.date, r.departure_time))
 
         # --- Step 7: Warnings for missing data ---
         missing_mileage = sum(1 for r in result.route_rows if not r.distance_miles)

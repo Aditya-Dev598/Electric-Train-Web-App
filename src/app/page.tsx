@@ -364,6 +364,7 @@ export default function Home() {
                   <thead>
                     <tr>
                       <th>Route</th>
+                      <th>Stop Type</th>
                       <th>Date</th>
                       <th>Departure</th>
                       <th>Class</th>
@@ -374,6 +375,7 @@ export default function Home() {
                     {result.timetable_preview.map((row, i) => (
                       <tr key={i}>
                         <td>{row.route_variant}</td>
+                        <td>{row.stop_type}</td>
                         <td>{row.date}</td>
                         <td>{row.departure_time}</td>
                         <td>{row.train_class || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
@@ -398,6 +400,7 @@ export default function Home() {
                       <th>Seq</th>
                       <th>From</th>
                       <th>To</th>
+                      <th>Stop Type</th>
                       <th>Miles</th>
                       <th>Run (min)</th>
                       <th>Wait (min)</th>
@@ -410,6 +413,7 @@ export default function Home() {
                         <td>{row.seq}</td>
                         <td>{row.from_station}</td>
                         <td>{row.to_station}</td>
+                        <td>{row.stop_type}</td>
                         <td>{row.distance_miles || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
                         <td>{row.run_min || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
                         <td>{row.wait_min}</td>

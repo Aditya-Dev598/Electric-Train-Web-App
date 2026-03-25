@@ -18,6 +18,7 @@ export interface TimetablePreview {
   date: string;
   departure_time: string;
   route_variant: string;
+  stop_type: string;
   train_class: string;
   number_of_coaches: string;
 }
@@ -27,6 +28,7 @@ export interface RoutePreview {
   seq: number;
   from_station: string;
   to_station: string;
+  stop_type: string;
   distance_miles: string;
   run_min: string;
   wait_min: string;

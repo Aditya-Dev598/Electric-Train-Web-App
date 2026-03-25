@@ -126,6 +126,7 @@ def _run_generation(
                     "date": r.date,
                     "departure_time": r.departure_time,
                     "route_variant": r.route_variant,
+                    "stop_type": r.stop_type,
                     "train_class": r.train_class,
                     "number_of_coaches": r.number_of_coaches,
                 }
@@ -137,6 +138,7 @@ def _run_generation(
                     "seq": r.seq,
                     "from_station": r.from_station,
                     "to_station": r.to_station,
+                    "stop_type": r.stop_type,
                     "distance_miles": r.distance_miles,
                     "run_min": r.run_min,
                     "wait_min": r.wait_min,
