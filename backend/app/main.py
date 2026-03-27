@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import health, timetable
+from backend.app.routers import cif, health, timetable
 from backend.app.security.middleware import (
     RateLimitMiddleware,
     RequestSizeLimitMiddleware,
@@ -126,6 +126,7 @@ def create_app() -> FastAPI:
     app.state.audit = audit
 
     # --- Routes ---
+    app.include_router(cif.router)
     app.include_router(timetable.router)
     app.include_router(health.router)
 

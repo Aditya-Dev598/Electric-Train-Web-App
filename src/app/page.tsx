@@ -1,15 +1,18 @@
 'use client';
 
-import { useState, FormEvent, useRef } from 'react';
+import { useState, FormEvent, useRef, useEffect } from 'react';
 import './globals.css';
 import {
   ValidateParams,
   GenerateParams,
   GenerationResult,
   ValidationResult,
+  CIFStatus,
   validateInputs,
   startGenerate,
   getGenerateStatus,
+  getCIFStatus,
+  uploadCIF,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
   getDebugDownloadUrl,
@@ -24,12 +27,21 @@ export default function Home() {
   });
   const [cifFile, setCifFile] = useState<File | null>(null);
 
+  const [cifStatus, setCifStatus] = useState<CIFStatus | null>(null);
+  const [cifUploading, setCifUploading] = useState(false);
+  const [cifUploadError, setCifUploadError] = useState<string | null>(null);
+
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
+
+  // Fetch CIF status once on mount
+  useEffect(() => {
+    getCIFStatus().then(setCifStatus).catch(() => {});
+  }, []);
 
   const updateField = (field: keyof ValidateParams, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -50,10 +62,25 @@ export default function Home() {
     }
   };
 
+  const handleCIFUpload = async (file: File) => {
+    setCifUploading(true);
+    setCifUploadError(null);
+    try {
+      const status = await uploadCIF(file);
+      setCifStatus(status);
+      setCifFile(null);
+    } catch (e) {
+      setCifUploadError(e instanceof Error ? e.message : 'CIF upload failed');
+    } finally {
+      setCifUploading(false);
+    }
+  };
+
   const handleGenerate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!cifFile) {
-      setError('Please select a CIF timetable file.');
+    const serverCifLoaded = cifStatus?.loaded ?? false;
+    if (!cifFile && !serverCifLoaded) {
+      setError('Please select a CIF timetable file, or upload one to the server first.');
       return;
     }
     setLoading(true);
@@ -65,7 +92,7 @@ export default function Home() {
       const params: GenerateParams = {
         ...form,
         date_end: form.date_end || undefined,
-        cif_file: cifFile,
+        ...(cifFile ? { cif_file: cifFile } : {}),
       };
 
       // POST the file; backend returns immediately with a job_id
@@ -109,12 +136,58 @@ export default function Home() {
         NESA mileage, and Darwin data sources.
       </p>
 
+      {/* CIF Status Bar */}
+      <div className="card" style={{ padding: '1rem 1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {cifStatus?.loaded ? (
+              <span style={{ color: 'var(--success, #16a34a)', fontWeight: 600 }}>
+                ✓ Server CIF loaded: {cifStatus.filename} — {cifStatus.schedule_count.toLocaleString()} schedules
+              </span>
+            ) : (
+              <span style={{ color: 'var(--warning, #b45309)', fontWeight: 600 }}>
+                ⚠ No server CIF loaded — upload one below or include it per request
+              </span>
+            )}
+          </div>
+          <label
+            style={{
+              cursor: cifUploading ? 'not-allowed' : 'pointer',
+              background: 'var(--btn-secondary-bg, #e5e7eb)',
+              padding: '0.4rem 0.9rem',
+              borderRadius: '0.375rem',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              opacity: cifUploading ? 0.6 : 1,
+            }}
+          >
+            {cifUploading ? 'Uploading…' : cifStatus?.loaded ? 'Replace CIF' : 'Upload CIF to Server'}
+            <input
+              type="file"
+              accept=".CIF,.cif,.MCA,.mca"
+              style={{ display: 'none' }}
+              disabled={cifUploading}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) handleCIFUpload(f);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        </div>
+        {cifUploadError && (
+          <div className="error-box" style={{ marginTop: '0.5rem' }}>{cifUploadError}</div>
+        )}
+      </div>
+
       {/* Input Form */}
       <div className="card">
         <h2>Input Parameters</h2>
         <form onSubmit={handleGenerate}>
           <div className="form-grid">
 
+            {/* CIF file input — shown only when no server CIF is loaded */}
+            {!cifStatus?.loaded && (
             <div className="form-group" style={{ gridColumn: '1 / -1' }}>
               <label htmlFor="cif_file">CIF Timetable File</label>
               <input
@@ -126,13 +199,13 @@ export default function Home() {
                   setValidation(null);
                   setError(null);
                 }}
-                required
               />
               <span className="hint">
                 Network Rail CIF/MCA timetable file (e.g. toc-full.CIF). Download from
                 Rail Data Marketplace or Network Rail Datafeeds.
               </span>
             </div>
+            )}
 
             <div className="form-group">
               <label htmlFor="station_name">Station</label>
@@ -212,7 +285,7 @@ export default function Home() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={loading || validating || !cifFile}
+              disabled={loading || validating || (!cifFile && !cifStatus?.loaded)}
             >
               {loading && <span className="loading-spinner" />}
               {loading ? 'Generating…' : 'Generate CSV'}

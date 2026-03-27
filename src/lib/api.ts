@@ -85,7 +85,14 @@ export interface ValidateParams {
 }
 
 export interface GenerateParams extends ValidateParams {
-  cif_file: File;
+  cif_file?: File;
+}
+
+export interface CIFStatus {
+  loaded: boolean;
+  filename: string | null;
+  schedule_count: number;
+  loaded_at: string | null;
 }
 
 export async function validateInputs(params: ValidateParams): Promise<ValidationResult> {
@@ -111,10 +118,27 @@ export async function validateInputs(params: ValidateParams): Promise<Validation
   return await resp.json();
 }
 
+export async function getCIFStatus(): Promise<CIFStatus> {
+  const resp = await fetch(`${API_BASE}/api/cif/status`);
+  if (!resp.ok) throw new Error(`CIF status check failed: ${resp.status}`);
+  return await resp.json();
+}
+
+export async function uploadCIF(file: File): Promise<CIFStatus> {
+  const body = new FormData();
+  body.append('cif_file', file);
+  const resp = await fetch(`${API_BASE}/api/cif/upload`, { method: 'POST', body });
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(detail.detail || `CIF upload failed: ${resp.status}`);
+  }
+  return await resp.json();
+}
+
 /** POST the CIF file + params; returns a job_id immediately (HTTP 202). */
 export async function startGenerate(params: GenerateParams): Promise<{ job_id: string }> {
   const body = new FormData();
-  body.append('cif_file', params.cif_file);
+  if (params.cif_file) body.append('cif_file', params.cif_file);
   body.append('station_name', params.station_name);
   body.append('operator_code', params.operator_code);
   body.append('date_start', params.date_start);

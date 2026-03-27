@@ -56,36 +56,42 @@ class GenerateRequest(BaseModel):
 
 def _run_generation(
     job_id: str,
-    raw_bytes: bytes,
+    raw_bytes: Optional[bytes],
     filename: str,
     station: str,
     operator: str,
     start_date: date,
     end_date: date,
     state,
+    use_server_cif: bool = False,
 ) -> None:
     """CPU-bound CIF parsing and timetable generation, executed in a thread pool."""
     try:
-        text = raw_bytes.decode("utf-8", errors="replace")
-        del raw_bytes  # release memory as soon as possible
+        if use_server_cif:
+            # Use the already-loaded server CIF parser directly
+            cif_parser = state.cif_parser
+        else:
+            text = raw_bytes.decode("utf-8", errors="replace")
+            del raw_bytes  # release memory as soon as possible
 
-        upload_parser = CIFParser()
-        upload_parser.parse_lines(text.splitlines(), source=filename)
-        del text
+            upload_parser = CIFParser()
+            upload_parser.parse_lines(text.splitlines(), source=filename)
+            del text
 
-        if not upload_parser.schedules:
-            _jobs[job_id] = {
-                "status": "error",
-                "detail": (
-                    f"No CIF schedules found in uploaded file '{filename}'. "
-                    "Ensure the file is a valid Network Rail CIF/MCA timetable."
-                ),
-            }
-            return
+            if not upload_parser.schedules:
+                _jobs[job_id] = {
+                    "status": "error",
+                    "detail": (
+                        f"No CIF schedules found in uploaded file '{filename}'. "
+                        "Ensure the file is a valid Network Rail CIF/MCA timetable."
+                    ),
+                }
+                return
+            cif_parser = upload_parser
 
         orchestrator = Orchestrator(
             corpus=state.corpus,
-            cif_parser=upload_parser,
+            cif_parser=cif_parser,
             mileage=state.mileage,
             darwin=state.darwin,
             audit=state.audit,
@@ -190,14 +196,15 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
 @router.post("/generate")
 async def generate_csv(
     request: Request,
-    cif_file: UploadFile = File(..., description="CIF/MCA timetable file from Network Rail"),
+    cif_file: Optional[UploadFile] = File(None, description="CIF/MCA timetable file (optional if server CIF already loaded)"),
     station_name: str = Form(..., min_length=1, max_length=100),
     operator_code: str = Form(..., min_length=2, max_length=3),
     date_start: str = Form(...),
     date_end: Optional[str] = Form(None),
 ) -> JSONResponse:
-    """Accept a CIF upload, start async generation, and return a job ID immediately.
+    """Accept an optional CIF upload, start async generation, and return a job ID immediately.
 
+    If no CIF file is provided, the server-loaded CIF (from POST /api/cif/upload) is used.
     Use GET /api/generate/status/{job_id} to poll for completion.
     """
     # Validate inputs (fast, no I/O)
@@ -211,20 +218,37 @@ async def generate_csv(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"{e.field}: {e.message}")
 
-    # Read the uploaded file (async, releases back-pressure to the client)
-    raw_bytes = await cif_file.read()
-    filename = cif_file.filename or "upload.CIF"
+    state = request.app.state
 
-    # Cheap LFS pointer check before spinning up the thread
-    first_line = raw_bytes[:200].decode("utf-8", errors="replace").split("\n", 1)[0].rstrip()
-    if first_line.startswith("version https://git-lfs.github.com"):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Uploaded file is a Git LFS pointer, not the actual CIF data. "
-                "Run 'git lfs pull' to download the real file before uploading."
-            ),
-        )
+    if cif_file is not None:
+        # Read the uploaded file (async, releases back-pressure to the client)
+        raw_bytes = await cif_file.read()
+        filename = cif_file.filename or "upload.CIF"
+
+        # Cheap LFS pointer check before spinning up the thread
+        first_line = raw_bytes[:200].decode("utf-8", errors="replace").split("\n", 1)[0].rstrip()
+        if first_line.startswith("version https://git-lfs.github.com"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Uploaded file is a Git LFS pointer, not the actual CIF data. "
+                    "Run 'git lfs pull' to download the real file before uploading."
+                ),
+            )
+        use_server_cif = False
+    else:
+        # Use server-loaded CIF
+        if not state.cif_parser.schedules:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No CIF file provided and no server CIF is loaded. "
+                    "Upload a CIF file via POST /api/cif/upload first, or include it in this request."
+                ),
+            )
+        raw_bytes = None
+        filename = getattr(state, "cif_filename", "server CIF")
+        use_server_cif = True
 
     # Queue the CPU-bound work in the thread pool and return immediately
     job_id = str(uuid.uuid4())
@@ -241,7 +265,8 @@ async def generate_csv(
         operator,
         start_date,
         end_date,
-        request.app.state,
+        state,
+        use_server_cif,
     )
 
     return JSONResponse(status_code=202, content={"job_id": job_id, "status": "processing"})
