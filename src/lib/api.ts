@@ -253,3 +253,31 @@ export async function runElectricPipeline(resultIds: string[]): Promise<Electric
 export function getElectricOutputUrl(runId: string, tssName: string): string {
   return `${API_BASE}/api/electric/output/${runId}/${tssName}`;
 }
+
+// ---------------------------------------------------------------------------
+// Solar pipeline (Phase 5)
+// ---------------------------------------------------------------------------
+
+export interface SolarRunResult {
+  run_id: string;
+  solar_share_pct: number;
+  utilisation_pct: number;
+  files: string[];
+  avg_profile_png_b64: string;
+}
+
+export async function runSolarPipeline(demandCsv: File, pvgisCsv: File): Promise<SolarRunResult> {
+  const body = new FormData();
+  body.append('demand_csv', demandCsv);
+  body.append('pvgis_csv', pvgisCsv);
+  const resp = await fetch(`${API_BASE}/api/solar/run`, { method: 'POST', body });
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(d.detail || `Solar run failed: ${resp.status}`);
+  }
+  return await resp.json();
+}
+
+export function getSolarOutputUrl(runId: string, filename: string): string {
+  return `${API_BASE}/api/solar/output/${runId}/${filename}`;
+}

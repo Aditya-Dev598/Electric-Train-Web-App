@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import cif, electric, health, timetable
+from backend.app.routers import cif, electric, health, solar, timetable
 from backend.app.security.middleware import (
     RateLimitMiddleware,
     RequestSizeLimitMiddleware,
@@ -135,6 +135,7 @@ def create_app() -> FastAPI:
     app.include_router(cif.router)
     app.include_router(timetable.router)
     app.include_router(electric.router)
+    app.include_router(solar.router)
     app.include_router(health.router)
 
     return app

@@ -12,6 +12,7 @@ import {
   StoredResult,
   ElectricStatus,
   ElectricRunResult,
+  SolarRunResult,
   validateInputs,
   startGenerate,
   getGenerateStatus,
@@ -22,10 +23,12 @@ import {
   getElectricStatus,
   uploadElectricFile,
   runElectricPipeline,
+  runSolarPipeline,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
   getDebugDownloadUrl,
   getElectricOutputUrl,
+  getSolarOutputUrl,
 } from '@/lib/api';
 
 export default function Home() {
@@ -55,6 +58,13 @@ export default function Home() {
   const [storedResults, setStoredResults] = useState<StoredResult[]>([]);
   const [selectedResultIds, setSelectedResultIds] = useState<Set<string>>(new Set());
   const [activeEditorResult, setActiveEditorResult] = useState<{ id: string; type: 'timetable' | 'route' } | null>(null);
+
+  // ── Solar pipeline (Phase 5) ──────────────────────────────────────────────
+  const [solarDemandFile, setSolarDemandFile] = useState<File | null>(null);
+  const [solarPvgisFile, setSolarPvgisFile] = useState<File | null>(null);
+  const [solarRunning, setSolarRunning] = useState(false);
+  const [solarResult, setSolarResult] = useState<SolarRunResult | null>(null);
+  const [solarError, setSolarError] = useState<string | null>(null);
 
   // ── Electric pipeline (Phase 4) ───────────────────────────────────────────
   const [electricStatus, setElectricStatus] = useState<ElectricStatus | null>(null);
@@ -189,6 +199,24 @@ export default function Home() {
       setElectricError(e instanceof Error ? e.message : 'Upload failed');
     } finally {
       setElectricUploading(prev => ({ ...prev, [fileType]: false }));
+    }
+  };
+
+  const handleRunSolar = async () => {
+    if (!solarDemandFile || !solarPvgisFile) {
+      setSolarError('Please select both the demand CSV and the PVGIS CSV files.');
+      return;
+    }
+    setSolarRunning(true);
+    setSolarError(null);
+    setSolarResult(null);
+    try {
+      const res = await runSolarPipeline(solarDemandFile, solarPvgisFile);
+      setSolarResult(res);
+    } catch (e) {
+      setSolarError(e instanceof Error ? e.message : 'Solar pipeline failed');
+    } finally {
+      setSolarRunning(false);
     }
   };
 
@@ -670,6 +698,92 @@ export default function Home() {
                   key={f}
                   className="btn btn-download"
                   href={getElectricOutputUrl(electricResult.run_id, f)}
+                  download={f}
+                  style={{ fontSize: '0.82rem' }}
+                >
+                  {f}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      {/* ── Solar Pipeline ────────────────────────────────────────────── */}
+      <div className="card">
+        <h2>Solar Analysis Pipeline</h2>
+        <p className="hint" style={{ marginBottom: '1rem' }}>
+          Upload a half-hour TSS demand CSV (output from the Electric pipeline above) and a
+          PVGIS hourly solar radiation CSV. The pipeline produces demand/supply profiles,
+          an average-day plot, and annual + seasonal solar metrics.
+        </p>
+
+        <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          <div className="form-group" style={{ flex: '1 1 220px', margin: 0 }}>
+            <label style={{ fontWeight: 500, fontSize: '0.875rem' }}>
+              Half-hour Demand CSV
+              {solarDemandFile && <span style={{ color: 'var(--success, #16a34a)', marginLeft: '0.5rem' }}>✓ {solarDemandFile.name}</span>}
+            </label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={e => { setSolarDemandFile(e.target.files?.[0] ?? null); setSolarError(null); }}
+              style={{ marginTop: '0.25rem' }}
+            />
+            <span className="hint">Output from Electric pipeline (per-TSS file with 48 half-hour columns)</span>
+          </div>
+
+          <div className="form-group" style={{ flex: '1 1 220px', margin: 0 }}>
+            <label style={{ fontWeight: 500, fontSize: '0.875rem' }}>
+              PVGIS Solar CSV
+              {solarPvgisFile && <span style={{ color: 'var(--success, #16a34a)', marginLeft: '0.5rem' }}>✓ {solarPvgisFile.name}</span>}
+            </label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={e => { setSolarPvgisFile(e.target.files?.[0] ?? null); setSolarError(null); }}
+              style={{ marginTop: '0.25rem' }}
+            />
+            <span className="hint">Download from PVGIS (hourly radiation, format: time,P,...)</span>
+          </div>
+        </div>
+
+        <div className="button-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={solarRunning || !solarDemandFile || !solarPvgisFile}
+            onClick={handleRunSolar}
+          >
+            {solarRunning && <span className="loading-spinner" />}
+            {solarRunning ? 'Analysing…' : 'Run Solar Analysis'}
+          </button>
+        </div>
+
+        {solarError && <div className="error-box" style={{ marginTop: '0.75rem' }}>{solarError}</div>}
+
+        {solarResult && (
+          <div style={{ marginTop: '1rem' }}>
+            <div className="success-box" style={{ marginBottom: '0.75rem' }}>
+              Analysis complete — Solar share: <strong>{solarResult.solar_share_pct.toFixed(1)}%</strong> &nbsp;|&nbsp;
+              Utilisation: <strong>{solarResult.utilisation_pct.toFixed(1)}%</strong>
+            </div>
+
+            {/* Inline plot */}
+            <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
+              <img
+                src={`data:image/png;base64,${solarResult.avg_profile_png_b64}`}
+                alt="Average demand/supply profile"
+                style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
+              />
+            </div>
+
+            {/* Download links */}
+            <div className="button-row" style={{ flexWrap: 'wrap' }}>
+              {solarResult.files.map(f => (
+                <a
+                  key={f}
+                  className="btn btn-download"
+                  href={getSolarOutputUrl(solarResult.run_id, f)}
                   download={f}
                   style={{ fontSize: '0.82rem' }}
                 >
