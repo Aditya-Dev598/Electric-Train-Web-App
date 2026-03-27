@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
-from typing import Optional
+from datetime import date, datetime, timezone
+from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -29,8 +31,7 @@ from backend.app.services.orchestrator import Orchestrator
 
 router = APIRouter(prefix="/api", tags=["timetable"])
 
-# In-memory result cache (keyed by job/generation ID)
-# For production, use Redis or similar persistent store
+# In-memory result cache (keyed by job/generation ID) — fast path for fresh results
 _result_cache: dict[str, dict] = {}
 
 # In-memory job status store
@@ -47,11 +48,19 @@ class ValidateRequest(BaseModel):
     date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
-class GenerateRequest(BaseModel):
-    station_name: str = Field(..., min_length=1, max_length=100)
-    operator_code: str = Field(..., min_length=2, max_length=3)
-    date_start: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
-    date_end: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+def _csv_to_rows(csv_text: str) -> list[dict[str, str]]:
+    """Parse a CSV string into a list of dicts (all values as strings)."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    return [dict(row) for row in reader]
+
+
+def _rows_to_csv(rows: list[dict[str, str]], fieldnames: list[str]) -> str:
+    """Serialise a list of dicts back to a CSV string."""
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
 
 
 def _run_generation(
@@ -68,11 +77,10 @@ def _run_generation(
     """CPU-bound CIF parsing and timetable generation, executed in a thread pool."""
     try:
         if use_server_cif:
-            # Use the already-loaded server CIF parser directly
             cif_parser = state.cif_parser
         else:
             text = raw_bytes.decode("utf-8", errors="replace")
-            del raw_bytes  # release memory as soon as possible
+            del raw_bytes
 
             upload_parser = CIFParser()
             upload_parser.parse_lines(text.splitlines(), source=filename)
@@ -108,13 +116,27 @@ def _run_generation(
         route_csv = generate_route_csv(result.route_rows)
         debug_csv = generate_debug_csv(result.debug_rows)
 
+        # Persist to disk
+        metadata = {
+            "station_name": station,
+            "operator_code": operator,
+            "date_start": str(start_date),
+            "date_end": str(end_date),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "timetable_rows": len(result.timetable_rows),
+            "route_rows": len(result.route_rows),
+            "warnings": result.warnings,
+            "provenance": result.provenance,
+            "summary": result.summary,
+        }
+        state.result_store.save(job_id, timetable_csv, route_csv, debug_csv, metadata)
+
+        # Also keep in memory for fast access
         _result_cache[job_id] = {
             "timetable_csv": timetable_csv,
             "route_csv": route_csv,
             "debug_csv": debug_csv,
         }
-
-        # Limit cache size
         if len(_result_cache) > 100:
             oldest = next(iter(_result_cache))
             del _result_cache[oldest]
@@ -153,7 +175,6 @@ def _run_generation(
             ],
         }
 
-        # Limit jobs store size
         if len(_jobs) > 200:
             oldest = next(iter(_jobs))
             del _jobs[oldest]
@@ -161,6 +182,21 @@ def _run_generation(
     except Exception as exc:
         _jobs[job_id] = {"status": "error", "detail": str(exc)}
 
+
+def _get_csv(gen_id: str, csv_type: str, state) -> str:
+    """Load CSV from memory cache then disk; raises 404 if not found."""
+    cached = _result_cache.get(gen_id)
+    if cached and f"{csv_type}_csv" in cached:
+        return cached[f"{csv_type}_csv"]
+    content = state.result_store.load_csv(gen_id, csv_type)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Generation result not found")
+    return content
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
 @router.post("/validate")
 async def validate_inputs(req: ValidateRequest) -> JSONResponse:
@@ -185,13 +221,13 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
         errors.append({"field": e.field, "message": e.message})
 
     if errors:
-        return JSONResponse(
-            status_code=422,
-            content={"valid": False, "errors": errors},
-        )
-
+        return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
     return JSONResponse(content={"valid": True, "errors": []})
 
+
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
 
 @router.post("/generate")
 async def generate_csv(
@@ -202,12 +238,7 @@ async def generate_csv(
     date_start: str = Form(...),
     date_end: Optional[str] = Form(None),
 ) -> JSONResponse:
-    """Accept an optional CIF upload, start async generation, and return a job ID immediately.
-
-    If no CIF file is provided, the server-loaded CIF (from POST /api/cif/upload) is used.
-    Use GET /api/generate/status/{job_id} to poll for completion.
-    """
-    # Validate inputs (fast, no I/O)
+    """Accept an optional CIF upload, start async generation, and return a job ID immediately."""
     try:
         station = validate_station_name(station_name)
         operator = validate_operator_code(operator_code)
@@ -221,11 +252,8 @@ async def generate_csv(
     state = request.app.state
 
     if cif_file is not None:
-        # Read the uploaded file (async, releases back-pressure to the client)
         raw_bytes = await cif_file.read()
         filename = cif_file.filename or "upload.CIF"
-
-        # Cheap LFS pointer check before spinning up the thread
         first_line = raw_bytes[:200].decode("utf-8", errors="replace").split("\n", 1)[0].rstrip()
         if first_line.startswith("version https://git-lfs.github.com"):
             raise HTTPException(
@@ -237,7 +265,6 @@ async def generate_csv(
             )
         use_server_cif = False
     else:
-        # Use server-loaded CIF
         if not state.cif_parser.schedules:
             raise HTTPException(
                 status_code=400,
@@ -250,7 +277,6 @@ async def generate_csv(
         filename = getattr(state, "cif_filename", "server CIF")
         use_server_cif = True
 
-    # Queue the CPU-bound work in the thread pool and return immediately
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {"status": "processing"}
 
@@ -274,61 +300,109 @@ async def generate_csv(
 
 @router.get("/generate/status/{job_id}")
 async def get_generation_status(job_id: str) -> JSONResponse:
-    """Poll the status of an async generation job.
-
-    Returns {"status": "processing"} while running,
-    the full generation result when status is "done",
-    or {"status": "error", "detail": "..."} on failure.
-    """
+    """Poll the status of an async generation job."""
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or expired")
     return JSONResponse(content=job)
 
 
-@router.get("/download/{gen_id}/timetable.csv")
-async def download_timetable(gen_id: str) -> Response:
-    """Download the timetable CSV for a generation result."""
-    cached = _result_cache.get(gen_id)
-    if not cached:
-        raise HTTPException(status_code=404, detail="Generation result not found or expired")
+# ---------------------------------------------------------------------------
+# Downloads (memory → disk fallback)
+# ---------------------------------------------------------------------------
 
+@router.get("/download/{gen_id}/timetable.csv")
+async def download_timetable(gen_id: str, request: Request) -> Response:
+    content = _get_csv(gen_id, "timetable", request.app.state)
     return Response(
-        content=cached["timetable_csv"],
+        content=content,
         media_type="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": "attachment; filename=timetable.csv",
-        },
+        headers={"Content-Disposition": "attachment; filename=timetable.csv"},
     )
 
 
 @router.get("/download/{gen_id}/route.csv")
-async def download_route(gen_id: str) -> Response:
-    """Download the route CSV for a generation result."""
-    cached = _result_cache.get(gen_id)
-    if not cached:
-        raise HTTPException(status_code=404, detail="Generation result not found or expired")
-
+async def download_route(gen_id: str, request: Request) -> Response:
+    content = _get_csv(gen_id, "route", request.app.state)
     return Response(
-        content=cached["route_csv"],
+        content=content,
         media_type="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": "attachment; filename=route.csv",
-        },
+        headers={"Content-Disposition": "attachment; filename=route.csv"},
     )
 
 
 @router.get("/download/{gen_id}/debug.csv")
-async def download_debug(gen_id: str) -> Response:
-    """Download the debug/diagnostic CSV for a generation result."""
-    cached = _result_cache.get(gen_id)
-    if not cached:
-        raise HTTPException(status_code=404, detail="Generation result not found or expired")
-
+async def download_debug(gen_id: str, request: Request) -> Response:
+    content = _get_csv(gen_id, "debug", request.app.state)
     return Response(
-        content=cached["debug_csv"],
+        content=content,
         media_type="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": "attachment; filename=debug.csv",
-        },
+        headers={"Content-Disposition": "attachment; filename=debug.csv"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Results history (Phase 2)
+# ---------------------------------------------------------------------------
+
+@router.get("/results")
+async def list_results(request: Request) -> JSONResponse:
+    """List all persisted generation results (newest first)."""
+    results = request.app.state.result_store.list_results()
+    return JSONResponse(content=results)
+
+
+@router.delete("/results/{gen_id}")
+async def delete_result(gen_id: str, request: Request) -> JSONResponse:
+    """Delete a persisted result from disk."""
+    deleted = request.app.state.result_store.delete(gen_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Result not found")
+    _result_cache.pop(gen_id, None)
+    return JSONResponse(content={"deleted": True})
+
+
+# ---------------------------------------------------------------------------
+# In-browser CSV editor endpoints (Phase 3)
+# ---------------------------------------------------------------------------
+
+@router.get("/results/{gen_id}/timetable.json")
+async def get_timetable_json(gen_id: str, request: Request) -> JSONResponse:
+    """Return full timetable CSV as JSON rows for the in-browser editor."""
+    content = _get_csv(gen_id, "timetable", request.app.state)
+    rows = _csv_to_rows(content)
+    return JSONResponse(content=rows)
+
+
+@router.get("/results/{gen_id}/route.json")
+async def get_route_json(gen_id: str, request: Request) -> JSONResponse:
+    """Return full route CSV as JSON rows for the in-browser editor."""
+    content = _get_csv(gen_id, "route", request.app.state)
+    rows = _csv_to_rows(content)
+    return JSONResponse(content=rows)
+
+
+@router.put("/results/{gen_id}/timetable")
+async def put_timetable(gen_id: str, request: Request, rows: list[dict[str, Any]] = Body(...)) -> JSONResponse:
+    """Save edited timetable rows back to disk."""
+    state = request.app.state
+    if not state.result_store.exists(gen_id):
+        raise HTTPException(status_code=404, detail="Result not found")
+    fieldnames = ["route_variant", "stop_type", "date", "departure_time", "train_class", "number_of_coaches"]
+    csv_text = _rows_to_csv(rows, fieldnames)
+    state.result_store.write_csv(gen_id, "timetable", csv_text)
+    _result_cache.pop(gen_id, None)  # invalidate memory cache
+    return JSONResponse(content={"saved": True, "rows": len(rows)})
+
+
+@router.put("/results/{gen_id}/route")
+async def put_route(gen_id: str, request: Request, rows: list[dict[str, Any]] = Body(...)) -> JSONResponse:
+    """Save edited route rows back to disk."""
+    state = request.app.state
+    if not state.result_store.exists(gen_id):
+        raise HTTPException(status_code=404, detail="Result not found")
+    fieldnames = ["route_variant", "seq", "from_station", "to_station", "stop_type", "distance_miles", "run_min", "wait_min"]
+    csv_text = _rows_to_csv(rows, fieldnames)
+    state.result_store.write_csv(gen_id, "route", csv_text)
+    _result_cache.pop(gen_id, None)
+    return JSONResponse(content={"saved": True, "rows": len(rows)})

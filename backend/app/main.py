@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import cif, health, timetable
+from backend.app.routers import cif, electric, health, timetable
 from backend.app.security.middleware import (
     RateLimitMiddleware,
     RequestSizeLimitMiddleware,
@@ -25,6 +25,7 @@ from backend.app.services.corpus_mapper import CorpusMapper
 from backend.app.services.darwin_enricher import DarwinEnricher
 from backend.app.services.mileage_resolver import MileageResolver
 from backend.app.services.orchestrator import Orchestrator
+from backend.app.services.result_store import ResultStore
 
 # Configure logging
 logging.basicConfig(
@@ -64,7 +65,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Content-Type"],
         max_age=3600,
     )
@@ -117,6 +118,9 @@ def create_app() -> FastAPI:
         audit=audit,
     )
 
+    # Result store (persists across restarts)
+    result_store = ResultStore(settings.results_data_path)
+
     # Store in app state for access from routes
     app.state.corpus = corpus
     app.state.cif_parser = cif_parser
@@ -124,10 +128,13 @@ def create_app() -> FastAPI:
     app.state.darwin = darwin
     app.state.orchestrator = orchestrator
     app.state.audit = audit
+    app.state.result_store = result_store
+    app.state.settings = settings
 
     # --- Routes ---
     app.include_router(cif.router)
     app.include_router(timetable.router)
+    app.include_router(electric.router)
     app.include_router(health.router)
 
     return app

@@ -1,24 +1,35 @@
 'use client';
 
-import { useState, FormEvent, useRef, useEffect } from 'react';
+import { useState, FormEvent, useEffect } from 'react';
 import './globals.css';
+import CsvEditor from '@/components/CsvEditor';
 import {
   ValidateParams,
   GenerateParams,
   GenerationResult,
   ValidationResult,
   CIFStatus,
+  StoredResult,
+  ElectricStatus,
+  ElectricRunResult,
   validateInputs,
   startGenerate,
   getGenerateStatus,
   getCIFStatus,
   uploadCIF,
+  listResults,
+  deleteResult,
+  getElectricStatus,
+  uploadElectricFile,
+  runElectricPipeline,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
   getDebugDownloadUrl,
+  getElectricOutputUrl,
 } from '@/lib/api';
 
 export default function Home() {
+  // ── Form state ────────────────────────────────────────────────────────────
   const [form, setForm] = useState<ValidateParams>({
     station_name: '',
     operator_code: '',
@@ -27,10 +38,12 @@ export default function Home() {
   });
   const [cifFile, setCifFile] = useState<File | null>(null);
 
+  // ── CIF status ────────────────────────────────────────────────────────────
   const [cifStatus, setCifStatus] = useState<CIFStatus | null>(null);
   const [cifUploading, setCifUploading] = useState(false);
   const [cifUploadError, setCifUploadError] = useState<string | null>(null);
 
+  // ── Generation ────────────────────────────────────────────────────────────
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,30 +51,42 @@ export default function Home() {
   const [progress, setProgress] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
 
-  // Fetch CIF status once on mount
+  // ── Results history (Phase 2) ─────────────────────────────────────────────
+  const [storedResults, setStoredResults] = useState<StoredResult[]>([]);
+  const [selectedResultIds, setSelectedResultIds] = useState<Set<string>>(new Set());
+  const [activeEditorResult, setActiveEditorResult] = useState<{ id: string; type: 'timetable' | 'route' } | null>(null);
+
+  // ── Electric pipeline (Phase 4) ───────────────────────────────────────────
+  const [electricStatus, setElectricStatus] = useState<ElectricStatus | null>(null);
+  const [electricUploading, setElectricUploading] = useState<Record<string, boolean>>({});
+  const [electricRunning, setElectricRunning] = useState(false);
+  const [electricResult, setElectricResult] = useState<ElectricRunResult | null>(null);
+  const [electricError, setElectricError] = useState<string | null>(null);
+
+  // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     getCIFStatus().then(setCifStatus).catch(() => {});
+    loadStoredResults();
+    getElectricStatus().then(setElectricStatus).catch(() => {});
   }, []);
 
+  const loadStoredResults = () => {
+    listResults().then(setStoredResults).catch(() => {});
+  };
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const updateField = (field: keyof ValidateParams, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
     setValidation(null);
     setError(null);
   };
 
-  const handleValidate = async () => {
-    setValidating(true);
-    setError(null);
-    try {
-      const res = await validateInputs(form);
-      setValidation(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Validation failed');
-    } finally {
-      setValidating(false);
-    }
+  const getFieldError = (field: string): string | undefined => {
+    if (!validation || validation.valid) return undefined;
+    return validation.errors.find(e => e.field === field)?.message;
   };
 
+  // ── CIF upload ────────────────────────────────────────────────────────────
   const handleCIFUpload = async (file: File) => {
     setCifUploading(true);
     setCifUploadError(null);
@@ -76,6 +101,21 @@ export default function Home() {
     }
   };
 
+  // ── Validation ────────────────────────────────────────────────────────────
+  const handleValidate = async () => {
+    setValidating(true);
+    setError(null);
+    try {
+      const res = await validateInputs(form);
+      setValidation(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Validation failed');
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  // ── Generation ────────────────────────────────────────────────────────────
   const handleGenerate = async (e: FormEvent) => {
     e.preventDefault();
     const serverCifLoaded = cifStatus?.loaded ?? false;
@@ -87,6 +127,7 @@ export default function Home() {
     setProgress('Uploading CIF file…');
     setError(null);
     setResult(null);
+    setActiveEditorResult(null);
 
     try {
       const params: GenerateParams = {
@@ -95,25 +136,21 @@ export default function Home() {
         ...(cifFile ? { cif_file: cifFile } : {}),
       };
 
-      // POST the file; backend returns immediately with a job_id
       const { job_id } = await startGenerate(params);
       setProgress('Processing CIF data — this may take several minutes for large files…');
 
-      // Poll the status endpoint until done or error
       while (true) {
         await new Promise(r => setTimeout(r, 3000));
         const status = await getGenerateStatus(job_id);
 
         if (status.status === 'done') {
-          // The done payload has the same shape as GenerationResult
           setResult(status as unknown as GenerationResult);
+          loadStoredResults();
           break;
         }
-
         if (status.status === 'error') {
           throw new Error(status.detail || 'Generation failed');
         }
-        // still processing — keep polling
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Generation failed');
@@ -123,11 +160,57 @@ export default function Home() {
     }
   };
 
-  const getFieldError = (field: string): string | undefined => {
-    if (!validation || validation.valid) return undefined;
-    return validation.errors.find(e => e.field === field)?.message;
+  // ── Results history ───────────────────────────────────────────────────────
+  const handleDeleteResult = async (id: string) => {
+    await deleteResult(id).catch(() => {});
+    setStoredResults(prev => prev.filter(r => r.generation_id !== id));
+    setSelectedResultIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    if (activeEditorResult?.id === id) setActiveEditorResult(null);
+    if (result?.generation_id === id) setResult(null);
   };
 
+  const toggleResultSelection = (id: string) => {
+    setSelectedResultIds(prev => {
+      const s = new Set(prev);
+      s.has(id) ? s.delete(id) : s.add(id);
+      return s;
+    });
+  };
+
+  // ── Electric pipeline ─────────────────────────────────────────────────────
+  const handleElectricUpload = async (fileType: 'rolling_stock' | 'station_points' | 'tss_points', file: File) => {
+    setElectricUploading(prev => ({ ...prev, [fileType]: true }));
+    setElectricError(null);
+    try {
+      await uploadElectricFile(fileType, file);
+      const status = await getElectricStatus();
+      setElectricStatus(status);
+    } catch (e) {
+      setElectricError(e instanceof Error ? e.message : 'Upload failed');
+    } finally {
+      setElectricUploading(prev => ({ ...prev, [fileType]: false }));
+    }
+  };
+
+  const handleRunElectric = async () => {
+    if (selectedResultIds.size === 0) {
+      setElectricError('Select at least one result from the history table above.');
+      return;
+    }
+    setElectricRunning(true);
+    setElectricError(null);
+    setElectricResult(null);
+    try {
+      const res = await runElectricPipeline(Array.from(selectedResultIds));
+      setElectricResult(res);
+    } catch (e) {
+      setElectricError(e instanceof Error ? e.message : 'Electric pipeline failed');
+    } finally {
+      setElectricRunning(false);
+    }
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="container">
       <h1>UK Rail Timetable Generator</h1>
@@ -136,7 +219,7 @@ export default function Home() {
         NESA mileage, and Darwin data sources.
       </p>
 
-      {/* CIF Status Bar */}
+      {/* ── CIF Status Bar ──────────────────────────────────────────────── */}
       <div className="card" style={{ padding: '1rem 1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -150,17 +233,15 @@ export default function Home() {
               </span>
             )}
           </div>
-          <label
-            style={{
-              cursor: cifUploading ? 'not-allowed' : 'pointer',
-              background: 'var(--btn-secondary-bg, #e5e7eb)',
-              padding: '0.4rem 0.9rem',
-              borderRadius: '0.375rem',
-              fontSize: '0.875rem',
-              fontWeight: 500,
-              opacity: cifUploading ? 0.6 : 1,
-            }}
-          >
+          <label style={{
+            cursor: cifUploading ? 'not-allowed' : 'pointer',
+            background: 'var(--btn-secondary-bg, #e5e7eb)',
+            padding: '0.4rem 0.9rem',
+            borderRadius: '0.375rem',
+            fontSize: '0.875rem',
+            fontWeight: 500,
+            opacity: cifUploading ? 0.6 : 1,
+          }}>
             {cifUploading ? 'Uploading…' : cifStatus?.loaded ? 'Replace CIF' : 'Upload CIF to Server'}
             <input
               type="file"
@@ -175,36 +256,33 @@ export default function Home() {
             />
           </label>
         </div>
-        {cifUploadError && (
-          <div className="error-box" style={{ marginTop: '0.5rem' }}>{cifUploadError}</div>
-        )}
+        {cifUploadError && <div className="error-box" style={{ marginTop: '0.5rem' }}>{cifUploadError}</div>}
       </div>
 
-      {/* Input Form */}
+      {/* ── Input Form ──────────────────────────────────────────────────── */}
       <div className="card">
         <h2>Input Parameters</h2>
         <form onSubmit={handleGenerate}>
           <div className="form-grid">
 
-            {/* CIF file input — shown only when no server CIF is loaded */}
             {!cifStatus?.loaded && (
-            <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-              <label htmlFor="cif_file">CIF Timetable File</label>
-              <input
-                id="cif_file"
-                type="file"
-                accept=".CIF,.cif,.MCA,.mca"
-                onChange={e => {
-                  setCifFile(e.target.files?.[0] ?? null);
-                  setValidation(null);
-                  setError(null);
-                }}
-              />
-              <span className="hint">
-                Network Rail CIF/MCA timetable file (e.g. toc-full.CIF). Download from
-                Rail Data Marketplace or Network Rail Datafeeds.
-              </span>
-            </div>
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label htmlFor="cif_file">CIF Timetable File</label>
+                <input
+                  id="cif_file"
+                  type="file"
+                  accept=".CIF,.cif,.MCA,.mca"
+                  onChange={e => {
+                    setCifFile(e.target.files?.[0] ?? null);
+                    setValidation(null);
+                    setError(null);
+                  }}
+                />
+                <span className="hint">
+                  Network Rail CIF/MCA timetable file (e.g. toc-full.CIF). Download from
+                  Rail Data Marketplace or Network Rail Datafeeds.
+                </span>
+              </div>
             )}
 
             <div className="form-group">
@@ -293,7 +371,6 @@ export default function Home() {
           </div>
         </form>
 
-        {/* Validation result */}
         {validation && (
           <div style={{ marginTop: '1rem' }}>
             {validation.valid ? (
@@ -312,7 +389,6 @@ export default function Home() {
         )}
       </div>
 
-      {/* Progress display */}
       {progress && (
         <div className="success-box" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span className="loading-spinner" />
@@ -320,43 +396,26 @@ export default function Home() {
         </div>
       )}
 
-      {/* Error display */}
-      {error && (
-        <div className="error-box">{error}</div>
-      )}
+      {error && <div className="error-box">{error}</div>}
 
-      {/* Results */}
+      {/* ── Latest Generation Result ──────────────────────────────────── */}
       {result && (
         <>
-          {/* Download Buttons */}
           <div className="card">
             <h2>Download Results</h2>
             <div className="button-row">
-              <a
-                className="btn btn-download"
-                href={getTimetableDownloadUrl(result.generation_id)}
-                download="timetable.csv"
-              >
+              <a className="btn btn-download" href={getTimetableDownloadUrl(result.generation_id)} download="timetable.csv">
                 Download Timetable CSV ({result.timetable_rows} rows)
               </a>
-              <a
-                className="btn btn-download"
-                href={getRouteDownloadUrl(result.generation_id)}
-                download="route.csv"
-              >
+              <a className="btn btn-download" href={getRouteDownloadUrl(result.generation_id)} download="route.csv">
                 Download Route CSV ({result.route_rows} rows)
               </a>
-              <a
-                className="btn btn-secondary"
-                href={getDebugDownloadUrl(result.generation_id)}
-                download="debug.csv"
-              >
+              <a className="btn btn-secondary" href={getDebugDownloadUrl(result.generation_id)} download="debug.csv">
                 Download Debug CSV
               </a>
             </div>
           </div>
 
-          {/* Warnings */}
           {result.warnings.length > 0 && (
             <div className="card">
               <h2>Warnings</h2>
@@ -366,7 +425,6 @@ export default function Home() {
             </div>
           )}
 
-          {/* Summary Statistics */}
           <div className="card">
             <h2>Summary Report</h2>
             <div className="summary-grid">
@@ -397,7 +455,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Source Provenance */}
           <div className="card">
             <h2>Source Provenance</h2>
             <div className="provenance-grid">
@@ -428,77 +485,201 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Timetable Preview */}
-          {result.timetable_preview.length > 0 && (
-            <div className="card">
-              <h2>Timetable Preview (first 20 rows)</h2>
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Route</th>
-                      <th>Stop Type</th>
-                      <th>Date</th>
-                      <th>Departure</th>
-                      <th>Class</th>
-                      <th>Coaches</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.timetable_preview.map((row, i) => (
-                      <tr key={i}>
-                        <td>{row.route_variant}</td>
-                        <td>{row.stop_type}</td>
-                        <td>{row.date}</td>
-                        <td>{row.departure_time}</td>
-                        <td>{row.train_class || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
-                        <td>{row.number_of_coaches || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          {/* Timetable editor */}
+          <div className="card">
+            <h2>Timetable Editor</h2>
+            <p className="hint" style={{ marginBottom: '0.75rem' }}>
+              Edit cells directly, delete rows, then click Save Changes. Fill in <code>train_type</code> and <code>cars</code> columns before running the Electric pipeline.
+            </p>
+            <CsvEditor resultId={result.generation_id} csvType="timetable" />
+          </div>
 
-          {/* Route Preview */}
-          {result.route_preview.length > 0 && (
-            <div className="card">
-              <h2>Route Preview (first 20 rows)</h2>
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Variant</th>
-                      <th>Seq</th>
-                      <th>From</th>
-                      <th>To</th>
-                      <th>Stop Type</th>
-                      <th>Miles</th>
-                      <th>Run (min)</th>
-                      <th>Wait (min)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.route_preview.map((row, i) => (
-                      <tr key={i}>
-                        <td>{row.route_variant}</td>
-                        <td>{row.seq}</td>
-                        <td>{row.from_station}</td>
-                        <td>{row.to_station}</td>
-                        <td>{row.stop_type}</td>
-                        <td>{row.distance_miles || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
-                        <td>{row.run_min || <span style={{color:'var(--text-muted)'}}>N/A</span>}</td>
-                        <td>{row.wait_min}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          {/* Route editor */}
+          <div className="card">
+            <h2>Route Editor</h2>
+            <CsvEditor resultId={result.generation_id} csvType="route" />
+          </div>
         </>
       )}
+
+      {/* ── Results History ────────────────────────────────────────────── */}
+      <div className="card">
+        <h2>Results History</h2>
+        {storedResults.length === 0 ? (
+          <p className="hint">No saved results yet. Generate a timetable to see it here.</p>
+        ) : (
+          <>
+            <p className="hint" style={{ marginBottom: '0.5rem' }}>
+              Check rows to select them for the Electric pipeline. Click a row to open the in-browser editor.
+            </p>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: 32 }}></th>
+                    <th>Station</th>
+                    <th>Operator</th>
+                    <th>Date Start</th>
+                    <th>Date End</th>
+                    <th>Rows</th>
+                    <th>Generated</th>
+                    <th>Edit</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {storedResults.map(r => (
+                    <tr key={r.generation_id} style={{ background: selectedResultIds.has(r.generation_id) ? 'var(--highlight-bg, #eff6ff)' : undefined }}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedResultIds.has(r.generation_id)}
+                          onChange={() => toggleResultSelection(r.generation_id)}
+                        />
+                      </td>
+                      <td>{r.station_name}</td>
+                      <td>{r.operator_code}</td>
+                      <td>{r.date_start}</td>
+                      <td>{r.date_end}</td>
+                      <td>{r.timetable_rows}</td>
+                      <td style={{ fontSize: '0.8rem' }}>{new Date(r.generated_at).toLocaleString()}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem' }}
+                          onClick={() => setActiveEditorResult(
+                            activeEditorResult?.id === r.generation_id ? null : { id: r.generation_id, type: 'timetable' }
+                          )}
+                        >
+                          {activeEditorResult?.id === r.generation_id ? 'Close' : 'Open'}
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem', color: 'var(--error, #dc2626)' }}
+                          onClick={() => handleDeleteResult(r.generation_id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Inline editor for a history result */}
+      {activeEditorResult && (
+        <div className="card">
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+            <h2 style={{ margin: 0 }}>
+              Editing: {storedResults.find(r => r.generation_id === activeEditorResult.id)?.station_name} — {activeEditorResult.type}
+            </h2>
+            {(['timetable', 'route'] as const).map(t => (
+              <button
+                key={t}
+                type="button"
+                className={`btn ${activeEditorResult.type === t ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '0.25rem 0.75rem', fontSize: '0.82rem' }}
+                onClick={() => setActiveEditorResult(prev => prev ? { ...prev, type: t } : null)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <CsvEditor resultId={activeEditorResult.id} csvType={activeEditorResult.type} />
+        </div>
+      )}
+
+      {/* ── Electric Pipeline ──────────────────────────────────────────── */}
+      <div className="card">
+        <h2>Electric Train Pipeline</h2>
+        <p className="hint" style={{ marginBottom: '1rem' }}>
+          Upload reference files, select results above, then run the energy analysis.
+          Make sure to fill in <code>train_type</code> and <code>cars</code> columns in the editor before running.
+        </p>
+
+        {/* Reference file uploads */}
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+          {([
+            { key: 'rolling_stock', label: 'Rolling Stock CSV' },
+            { key: 'station_points', label: 'Station Points CSV' },
+            { key: 'tss_points', label: 'TSS Points CSV (optional)' },
+          ] as const).map(({ key, label }) => (
+            <div key={key} style={{ flex: '1 1 180px' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 500, marginBottom: '0.3rem' }}>
+                {electricStatus?.[key] ? (
+                  <span style={{ color: 'var(--success, #16a34a)' }}>✓ </span>
+                ) : (
+                  <span style={{ color: 'var(--text-muted, #6b7280)' }}>○ </span>
+                )}
+                {label}
+              </div>
+              <label style={{
+                cursor: electricUploading[key] ? 'not-allowed' : 'pointer',
+                background: 'var(--btn-secondary-bg, #e5e7eb)',
+                padding: '0.3rem 0.7rem',
+                borderRadius: '0.375rem',
+                fontSize: '0.82rem',
+                display: 'inline-block',
+                opacity: electricUploading[key] ? 0.6 : 1,
+              }}>
+                {electricUploading[key] ? 'Uploading…' : electricStatus?.[key] ? 'Replace' : 'Upload'}
+                <input
+                  type="file"
+                  accept=".csv"
+                  style={{ display: 'none' }}
+                  disabled={!!electricUploading[key]}
+                  onChange={e => {
+                    const f = e.target.files?.[0];
+                    if (f) handleElectricUpload(key, f);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+
+        <div className="button-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={electricRunning || !electricStatus?.rolling_stock || !electricStatus?.station_points || selectedResultIds.size === 0}
+            onClick={handleRunElectric}
+          >
+            {electricRunning && <span className="loading-spinner" />}
+            {electricRunning ? 'Running…' : `Run Electric Pipeline (${selectedResultIds.size} result${selectedResultIds.size !== 1 ? 's' : ''} selected)`}
+          </button>
+        </div>
+
+        {electricError && <div className="error-box" style={{ marginTop: '0.75rem' }}>{electricError}</div>}
+
+        {electricResult && (
+          <div style={{ marginTop: '1rem' }}>
+            <div className="success-box">Pipeline complete — {electricResult.tss_files.length} TSS output file{electricResult.tss_files.length !== 1 ? 's' : ''}</div>
+            <div className="button-row" style={{ marginTop: '0.5rem', flexWrap: 'wrap' }}>
+              {electricResult.tss_files.map(f => (
+                <a
+                  key={f}
+                  className="btn btn-download"
+                  href={getElectricOutputUrl(electricResult.run_id, f)}
+                  download={f}
+                  style={{ fontSize: '0.82rem' }}
+                >
+                  {f}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

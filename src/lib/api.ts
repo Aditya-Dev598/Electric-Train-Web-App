@@ -179,3 +179,77 @@ export function getRouteDownloadUrl(generationId: string): string {
 export function getDebugDownloadUrl(generationId: string): string {
   return `${API_BASE}/api/download/${generationId}/debug.csv`;
 }
+
+// ---------------------------------------------------------------------------
+// Results history (Phase 2)
+// ---------------------------------------------------------------------------
+
+export interface StoredResult {
+  generation_id: string;
+  station_name: string;
+  operator_code: string;
+  date_start: string;
+  date_end: string;
+  generated_at: string;
+  timetable_rows: number;
+  route_rows: number;
+}
+
+export async function listResults(): Promise<StoredResult[]> {
+  const resp = await fetch(`${API_BASE}/api/results`);
+  if (!resp.ok) throw new Error(`Failed to list results: ${resp.status}`);
+  return await resp.json();
+}
+
+export async function deleteResult(generationId: string): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/results/${generationId}`, { method: 'DELETE' });
+  if (!resp.ok) throw new Error(`Delete failed: ${resp.status}`);
+}
+
+// ---------------------------------------------------------------------------
+// Electric pipeline (Phase 4)
+// ---------------------------------------------------------------------------
+
+export interface ElectricStatus {
+  rolling_stock: boolean;
+  station_points: boolean;
+  tss_points: boolean;
+}
+
+export async function getElectricStatus(): Promise<ElectricStatus> {
+  const resp = await fetch(`${API_BASE}/api/electric/status`);
+  if (!resp.ok) throw new Error(`Electric status failed: ${resp.status}`);
+  return await resp.json();
+}
+
+export async function uploadElectricFile(fileType: 'rolling_stock' | 'station_points' | 'tss_points', file: File): Promise<void> {
+  const body = new FormData();
+  body.append('file', file);
+  const resp = await fetch(`${API_BASE}/api/electric/upload/${fileType}`, { method: 'POST', body });
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(d.detail || `Upload failed: ${resp.status}`);
+  }
+}
+
+export interface ElectricRunResult {
+  run_id: string;
+  tss_files: string[];
+}
+
+export async function runElectricPipeline(resultIds: string[]): Promise<ElectricRunResult> {
+  const resp = await fetch(`${API_BASE}/api/electric/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ result_ids: resultIds }),
+  });
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(d.detail || `Electric run failed: ${resp.status}`);
+  }
+  return await resp.json();
+}
+
+export function getElectricOutputUrl(runId: string, tssName: string): string {
+  return `${API_BASE}/api/electric/output/${runId}/${tssName}`;
+}

@@ -37,6 +37,11 @@ class Settings:
     rate_limit_per_minute: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
     max_request_size_bytes: int = int(os.getenv("MAX_REQUEST_SIZE_BYTES", str(1024 * 1024)))
 
+    # --- Persistent storage paths ---
+    results_data_path: str = os.getenv("RESULTS_DATA_PATH", str(_DATA_DIR / "results"))
+    electric_data_path: str = os.getenv("ELECTRIC_DATA_PATH", str(_DATA_DIR / "electric"))
+    solar_data_path: str = os.getenv("SOLAR_DATA_PATH", str(_DATA_DIR / "solar"))
+
     # --- Output ---
     output_dir: str = os.getenv("OUTPUT_DIR", "output")
 
