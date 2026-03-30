@@ -78,6 +78,29 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
     setRows(prev => [...prev, emptyRow]);
   };
 
+  const handleRenumberSeq = () => {
+    if (!csvKeys.includes('seq') || !csvKeys.includes('route_variant')) return;
+
+    // Group rows by route_variant, sort each group by current seq, renumber from 1
+    const grouped = new Map<string, Row[]>();
+    rows.forEach(row => {
+      const rv = row['route_variant'] ?? '';
+      if (!grouped.has(rv)) grouped.set(rv, []);
+      grouped.get(rv)!.push(row);
+    });
+
+    const renumbered: Row[] = [];
+    grouped.forEach(group => {
+      group
+        .sort((a, b) => Number(a['seq']) - Number(b['seq']))
+        .forEach((row, idx) => {
+          renumbered.push({ ...row, seq: String(idx + 1) });
+        });
+    });
+
+    setRows(renumbered);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveMsg(null);
@@ -131,6 +154,16 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
         >
           Add Row
         </button>
+        {csvType === 'route' && csvKeys.includes('seq') && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+            onClick={handleRenumberSeq}
+          >
+            Renumber Seq
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-primary"
