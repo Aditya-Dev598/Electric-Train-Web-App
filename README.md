@@ -308,6 +308,7 @@ At the top of the page you will see a **CIF Status** bar:
 - **Amber** (not loaded): Click **Upload CIF** and select your `.MCA` or `.CIF` file. The file is saved on the server and reused for all future queries without re-uploading.
 
 > Once uploaded, the CIF stays loaded even after you close the browser tab. You only need to upload it again if you want to use a newer CIF file.
+> The server accepts CIF files up to **2 GB** — the full Network Rail `toc-full.CIF` is typically around 1 GB.
 
 ---
 
@@ -351,13 +352,16 @@ Fill in the form:
 
 After generating, an **Excel-like editor** appears below the results for both the Timetable and Route CSVs.
 
-- **Click any cell** to edit it directly in the browser
+- **Double-click any cell** to edit its value; press Enter or Tab to confirm
 - **Select rows** using the checkbox column on the left
 - Click **Delete Selected** to remove chosen rows
+- Click **Add Row** to append a blank row at the bottom
 - Click **Save Changes** to write your edits back to the server (the downloaded CSV will reflect your changes)
-- Use **Ctrl+C / Ctrl+V** for copy and paste between cells
 
-> This is particularly useful for filling in the `train_type` and `cars` columns before running the Electric Pipeline (see Step 5).
+**Route editor only:**
+- Click **Renumber Seq** after deleting stops to close any gaps in the `seq` column — it renumbers each route variant independently starting from 1, so two different route variants never interfere with each other
+
+> This is particularly useful for filling in the `train_type` and `cars` columns, and for shortening routes by deleting unwanted stops before running the Electric Pipeline (see Step 5).
 
 ---
 
@@ -369,7 +373,10 @@ All generated results are saved automatically and persist across server restarts
 - Row counts for timetable and route
 - Buttons to **open the editor**, **download CSVs**, or **delete** the result
 
-You can also select multiple results (checkboxes) to combine them for the Electric Pipeline.
+**Merging results:** Select two or more results using the checkboxes and click **Merge Selected (N)**. This combines their timetable and route data into a single new entry in Results History:
+- Timetable rows are concatenated; exact duplicate service rows are removed automatically
+- Route deduplication is whole-route based — if Fleet "Stopping" is A→B→C and Camberley "Stopping" is also A→B→C, only one copy is kept; but if they have different stops they are both kept unchanged
+- The merged result can be edited (fill `train_type`/`cars`) and then used as input to the Electric Pipeline
 
 ---
 
@@ -396,16 +403,16 @@ The Electric Pipeline calculates the half-hourly energy demand at each traction 
 
 **Steps:**
 1. Upload Rolling Stock and Station Points CSVs using the upload buttons in the **Electric Pipeline** panel
-2. In **Results History**, tick the checkboxes for the results you want to include (you can combine multiple date ranges or stations)
-3. Before running: use the in-browser editor to fill in `train_type` and `cars` columns in your timetable CSVs — these are not populated automatically by the timetable generator
-4. Click **Run Electric Pipeline**
+2. Choose your data source — you have two options:
+   - **From Results History:** tick the checkboxes for the results you want (one or more), or use **Merge Selected** first to combine them into one editable result
+   - **Direct upload:** upload a Timetable CSV and a Route CSV directly using the **Timetable CSV** and **Route CSV** upload slots in the Electric panel (useful for externally prepared files)
+3. Before running: use the in-browser editor to fill in `train_type` and `cars` columns in your timetable CSV — these are not populated automatically by the timetable generator
+4. Click **Run Electric Pipeline** (the button label shows which mode is active)
 5. The results appear as one CSV file per TSS. Each file has:
    - `date` and `dep_time` columns
    - 48 half-hour energy columns (`0:30`, `1:00`, … `0:00`) in kWh
    - A `Total Units` column summing all bins
 6. Click each TSS name to download its CSV
-
-> **Combining multiple results:** If you select more than one result, timetable rows are concatenated and route rows are deduplicated (identical `route_variant + stop sequence` patterns are merged automatically).
 
 ---
 
