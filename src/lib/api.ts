@@ -214,6 +214,8 @@ export interface ElectricStatus {
   rolling_stock: boolean;
   station_points: boolean;
   tss_points: boolean;
+  timetable: boolean;
+  route: boolean;
 }
 
 export async function getElectricStatus(): Promise<ElectricStatus> {
@@ -222,7 +224,10 @@ export async function getElectricStatus(): Promise<ElectricStatus> {
   return await resp.json();
 }
 
-export async function uploadElectricFile(fileType: 'rolling_stock' | 'station_points' | 'tss_points', file: File): Promise<void> {
+export async function uploadElectricFile(
+  fileType: 'rolling_stock' | 'station_points' | 'tss_points' | 'timetable' | 'route',
+  file: File,
+): Promise<void> {
   const body = new FormData();
   body.append('file', file);
   const resp = await fetch(`${API_BASE}/api/electric/upload/${fileType}`, { method: 'POST', body });
@@ -237,7 +242,7 @@ export interface ElectricRunResult {
   tss_files: string[];
 }
 
-export async function runElectricPipeline(resultIds: string[]): Promise<ElectricRunResult> {
+export async function runElectricPipeline(resultIds: string[] = []): Promise<ElectricRunResult> {
   const resp = await fetch(`${API_BASE}/api/electric/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -252,6 +257,25 @@ export async function runElectricPipeline(resultIds: string[]): Promise<Electric
 
 export function getElectricOutputUrl(runId: string, tssName: string): string {
   return `${API_BASE}/api/electric/output/${runId}/${tssName}`;
+}
+
+export interface MergeResult {
+  gen_id: string;
+  timetable_rows: number;
+  route_rows: number;
+}
+
+export async function mergeResults(resultIds: string[]): Promise<MergeResult> {
+  const resp = await fetch(`${API_BASE}/api/electric/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ result_ids: resultIds }),
+  });
+  if (!resp.ok) {
+    const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(d.detail || `Merge failed: ${resp.status}`);
+  }
+  return await resp.json();
 }
 
 // ---------------------------------------------------------------------------

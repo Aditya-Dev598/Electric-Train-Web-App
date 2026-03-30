@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 _CIF_UPLOAD_DIR = Path(__file__).parent.parent.parent / "data" / "cif"
 _CIF_UPLOAD_PATH = _CIF_UPLOAD_DIR / "uploaded.CIF"
 
-# Maximum CIF upload size: 300 MB (CIF files can be large)
-_CIF_MAX_BYTES = 300 * 1024 * 1024
+# Maximum CIF upload size: 2 GB (real CIF files are ~1 GB)
+_CIF_MAX_BYTES = 2 * 1024 * 1024 * 1024
 
 
 @router.post("/upload")
@@ -44,7 +44,7 @@ async def upload_cif(
     if len(raw_bytes) > _CIF_MAX_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"CIF file too large ({len(raw_bytes) // (1024*1024)} MB). Maximum is 300 MB.",
+            detail=f"CIF file too large ({len(raw_bytes) // (1024*1024)} MB). Maximum is 2 GB.",
         )
 
     # LFS pointer guard

@@ -374,25 +374,43 @@ def run_pipeline(
 
 
 def combine_csvs(csv_texts: list[str]) -> str:
-    """Combine multiple timetable CSV texts into one, deduplicating header rows."""
+    """Combine multiple timetable CSV texts, removing exact duplicate rows."""
     frames = [pd.read_csv(io.StringIO(t)) for t in csv_texts if t.strip()]
     if not frames:
         return ""
     combined = pd.concat(frames, ignore_index=True)
+    combined = combined.drop_duplicates()
     buf = io.StringIO()
     combined.to_csv(buf, index=False)
     return buf.getvalue()
 
 
 def combine_route_csvs(csv_texts: list[str]) -> str:
-    """Combine multiple route CSV texts, deduplicating identical route patterns."""
-    frames = [pd.read_csv(io.StringIO(t)) for t in csv_texts if t.strip()]
-    if not frames:
+    """Combine multiple route CSV texts using whole-route fingerprinting.
+
+    Two route_variant groups are considered identical only if every segment
+    (seq, from_station, to_station) matches exactly.  Same-named routes with
+    different stop sequences are kept as distinct entries — only fully
+    identical routes are deduplicated.
+    """
+    seen_fingerprints: set[tuple] = set()
+    kept: list[pd.DataFrame] = []
+    for text in csv_texts:
+        if not text.strip():
+            continue
+        frame = pd.read_csv(io.StringIO(text))
+        for _rv, group in frame.groupby("route_variant"):
+            g = group.sort_values("seq")
+            fp = tuple(zip(
+                g["seq"].tolist(),
+                g["from_station"].tolist(),
+                g["to_station"].tolist(),
+            ))
+            if fp not in seen_fingerprints:
+                seen_fingerprints.add(fp)
+                kept.append(g)
+    if not kept:
         return ""
-    combined = pd.concat(frames, ignore_index=True)
-    # Deduplicate on all key columns (identical route segment = same row)
-    key_cols = [c for c in ["route_variant", "seq", "from_station", "to_station"] if c in combined.columns]
-    combined = combined.drop_duplicates(subset=key_cols, keep="first")
     buf = io.StringIO()
-    combined.to_csv(buf, index=False)
+    pd.concat(kept, ignore_index=True).to_csv(buf, index=False)
     return buf.getvalue()

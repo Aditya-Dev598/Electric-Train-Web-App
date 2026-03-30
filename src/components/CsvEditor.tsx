@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import DataGrid, { Column, SelectColumn } from 'react-data-grid';
+import DataGrid, { Column, SelectColumn, textEditor } from 'react-data-grid';
 import 'react-data-grid/lib/styles.css';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
@@ -13,19 +13,20 @@ interface CsvEditorProps {
   onSaved?: () => void;
 }
 
-type Row = Record<string, string>;
+// _rowId is an internal stable key — never sent to the server
+type Row = Record<string, string> & { _rowId: string };
 
 export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps) {
   const [rows, setRows] = useState<Row[]>([]);
   const [columns, setColumns] = useState<Column<Row>[]>([]);
+  const [csvKeys, setCsvKeys] = useState<string[]>([]);
   const [selectedRows, setSelectedRows] = useState<ReadonlySet<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  // Unique row key: concatenate all values (rows don't have natural IDs)
-  const rowKey = useCallback((row: Row) => JSON.stringify(row), []);
+  const rowKey = useCallback((row: Row) => row._rowId, []);
 
   useEffect(() => {
     setLoading(true);
@@ -33,15 +34,18 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
     fetch(`${API_BASE}/api/results/${resultId}/${csvType}.json`)
       .then(r => {
         if (!r.ok) throw new Error(`Failed to load ${csvType}: ${r.status}`);
-        return r.json() as Promise<Row[]>;
+        return r.json() as Promise<Record<string, string>[]>;
       })
       .then(data => {
         if (data.length === 0) {
           setRows([]);
           setColumns([]);
+          setCsvKeys([]);
           return;
         }
+        // Derive column keys from original data BEFORE stamping _rowId
         const keys = Object.keys(data[0]);
+        setCsvKeys(keys);
         const cols: Column<Row>[] = [
           SelectColumn,
           ...keys.map(k => ({
@@ -49,12 +53,15 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
             name: k,
             resizable: true,
             editable: true,
+            renderEditCell: textEditor,  // required by react-data-grid beta to open editor
             minWidth: 80,
             frozen: k === 'route_variant',
           })),
         ];
         setColumns(cols);
-        setRows(data);
+        // Stamp a stable _rowId on each row so editing never invalidates the key
+        const stamped: Row[] = data.map(r => ({ ...r, _rowId: crypto.randomUUID() }));
+        setRows(stamped);
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -65,15 +72,23 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
     setSelectedRows(new Set());
   };
 
+  const handleAddRow = () => {
+    const emptyRow: Row = { _rowId: crypto.randomUUID() };
+    csvKeys.forEach(k => { emptyRow[k] = ''; });
+    setRows(prev => [...prev, emptyRow]);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveMsg(null);
     setError(null);
     try {
+      // Strip internal _rowId before sending to server
+      const payload = rows.map(({ _rowId, ...rest }) => rest);
       const resp = await fetch(`${API_BASE}/api/results/${resultId}/${csvType}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(rows),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) {
         const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
@@ -109,6 +124,15 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
         </button>
         <button
           type="button"
+          className="btn btn-secondary"
+          style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+          disabled={csvKeys.length === 0}
+          onClick={handleAddRow}
+        >
+          Add Row
+        </button>
+        <button
+          type="button"
           className="btn btn-primary"
           style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
           disabled={saving}
@@ -130,6 +154,9 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
         style={{ height: 380, fontSize: '0.82rem' }}
         className="rdg-light"
       />
+      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted, #6b7280)', marginTop: '0.35rem' }}>
+        Double-click a cell to edit. Press Enter or Tab to confirm. Click Save Changes to persist.
+      </p>
     </div>
   );
 }

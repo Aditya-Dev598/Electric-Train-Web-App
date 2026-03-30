@@ -12,6 +12,7 @@ import {
   StoredResult,
   ElectricStatus,
   ElectricRunResult,
+  MergeResult,
   SolarRunResult,
   validateInputs,
   startGenerate,
@@ -23,6 +24,7 @@ import {
   getElectricStatus,
   uploadElectricFile,
   runElectricPipeline,
+  mergeResults,
   runSolarPipeline,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
@@ -72,6 +74,10 @@ export default function Home() {
   const [electricRunning, setElectricRunning] = useState(false);
   const [electricResult, setElectricResult] = useState<ElectricRunResult | null>(null);
   const [electricError, setElectricError] = useState<string | null>(null);
+
+  // ── Merge results ─────────────────────────────────────────────────────────
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
 
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -188,7 +194,7 @@ export default function Home() {
   };
 
   // ── Electric pipeline ─────────────────────────────────────────────────────
-  const handleElectricUpload = async (fileType: 'rolling_stock' | 'station_points' | 'tss_points', file: File) => {
+  const handleElectricUpload = async (fileType: 'rolling_stock' | 'station_points' | 'tss_points' | 'timetable' | 'route', file: File) => {
     setElectricUploading(prev => ({ ...prev, [fileType]: true }));
     setElectricError(null);
     try {
@@ -221,8 +227,13 @@ export default function Home() {
   };
 
   const handleRunElectric = async () => {
-    if (selectedResultIds.size === 0) {
-      setElectricError('Select at least one result from the history table above.');
+    const hasData =
+      selectedResultIds.size > 0 ||
+      (electricStatus?.timetable === true && electricStatus?.route === true);
+    if (!hasData) {
+      setElectricError(
+        'Select at least one result from the history, or upload timetable + route CSVs directly.',
+      );
       return;
     }
     setElectricRunning(true);
@@ -235,6 +246,23 @@ export default function Home() {
       setElectricError(e instanceof Error ? e.message : 'Electric pipeline failed');
     } finally {
       setElectricRunning(false);
+    }
+  };
+
+  const handleMergeSelected = async () => {
+    if (selectedResultIds.size < 2) {
+      setMergeError('Select at least 2 results to merge.');
+      return;
+    }
+    setMerging(true);
+    setMergeError(null);
+    try {
+      await mergeResults(Array.from(selectedResultIds));
+      loadStoredResults();
+    } catch (e) {
+      setMergeError(e instanceof Error ? e.message : 'Merge failed');
+    } finally {
+      setMerging(false);
     }
   };
 
@@ -537,9 +565,22 @@ export default function Home() {
           <p className="hint">No saved results yet. Generate a timetable to see it here.</p>
         ) : (
           <>
-            <p className="hint" style={{ marginBottom: '0.5rem' }}>
-              Check rows to select them for the Electric pipeline. Click a row to open the in-browser editor.
-            </p>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+              <p className="hint" style={{ margin: 0 }}>
+                Check rows to select for the Electric pipeline or to merge.
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={merging || selectedResultIds.size < 2}
+                onClick={handleMergeSelected}
+                style={{ padding: '0.3rem 0.8rem', fontSize: '0.82rem' }}
+              >
+                {merging && <span className="loading-spinner" />}
+                {merging ? 'Merging…' : `Merge Selected (${selectedResultIds.size})`}
+              </button>
+              {mergeError && <span className="error-text">{mergeError}</span>}
+            </div>
             <div className="table-wrapper">
               <table>
                 <thead>
@@ -639,6 +680,8 @@ export default function Home() {
             { key: 'rolling_stock', label: 'Rolling Stock CSV' },
             { key: 'station_points', label: 'Station Points CSV' },
             { key: 'tss_points', label: 'TSS Points CSV (optional)' },
+            { key: 'timetable', label: 'Timetable CSV (direct upload)' },
+            { key: 'route', label: 'Route CSV (direct upload)' },
           ] as const).map(({ key, label }) => (
             <div key={key} style={{ flex: '1 1 180px' }}>
               <div style={{ fontSize: '0.85rem', fontWeight: 500, marginBottom: '0.3rem' }}>
@@ -679,11 +722,20 @@ export default function Home() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={electricRunning || !electricStatus?.rolling_stock || !electricStatus?.station_points || selectedResultIds.size === 0}
+            disabled={
+              electricRunning ||
+              !electricStatus?.rolling_stock ||
+              !electricStatus?.station_points ||
+              (selectedResultIds.size === 0 && !(electricStatus?.timetable && electricStatus?.route))
+            }
             onClick={handleRunElectric}
           >
             {electricRunning && <span className="loading-spinner" />}
-            {electricRunning ? 'Running…' : `Run Electric Pipeline (${selectedResultIds.size} result${selectedResultIds.size !== 1 ? 's' : ''} selected)`}
+            {electricRunning
+              ? 'Running…'
+              : selectedResultIds.size > 0
+                ? `Run Electric Pipeline (${selectedResultIds.size} result${selectedResultIds.size !== 1 ? 's' : ''} selected)`
+                : 'Run Electric Pipeline (direct upload)'}
           </button>
         </div>
 
