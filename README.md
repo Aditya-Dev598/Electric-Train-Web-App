@@ -2,6 +2,8 @@
 
 Generate railway timetable and route CSV files from official UK rail data — no programming knowledge required to run it.
 
+Beyond basic timetable generation, the app includes an **Electric Train Energy Pipeline** and a **Solar Pipeline** for analysing the energy demand of electric train services and modelling solar supply.
+
 ---
 
 ## Table of Contents
@@ -15,10 +17,17 @@ Generate railway timetable and route CSV files from official UK rail data — no
    - [Mac](#mac)
    - [Linux](#linux)
 6. [Using the App](#using-the-app)
+   - [Step 1 — Upload CIF (once)](#step-1--upload-cif-once)
+   - [Step 2 — Generate Timetables](#step-2--generate-timetables)
+   - [Step 3 — Edit CSVs in Browser](#step-3--edit-csvs-in-browser)
+   - [Step 4 — Results History](#step-4--results-history)
+   - [Step 5 — Electric Energy Pipeline](#step-5--electric-energy-pipeline)
+   - [Step 6 — Solar Analysis](#step-6--solar-analysis)
 7. [Understanding the Outputs](#understanding-the-outputs)
 8. [Stopping the App](#stopping-the-app)
 9. [Troubleshooting](#troubleshooting)
 10. [Data Sources](#data-sources)
+11. [Project Structure (for developers)](#project-structure-for-developers)
 
 ---
 
@@ -28,6 +37,11 @@ You type in a **station name**, an **operator code** (e.g. `VT` for Avanti West 
 
 - **Timetable CSV** — every departure at that station on those dates, with train class and number of coaches
 - **Route CSV** — the ordered list of stations the train calls at, with distances and journey times between each pair
+
+Once you have those outputs, the app can also:
+
+- **Calculate electric energy demand** per traction substation (TSS) for each half-hour of the day, using a built-in energy model with rolling-stock parameters
+- **Model solar generation** against that demand using PVGIS irradiance data, computing solar share %, utilisation %, and seasonal breakdowns
 
 All data comes from official Network Rail sources only (CIF timetables, CORPUS station data, NESA mileage, Darwin).
 
@@ -126,11 +140,12 @@ Create a free account and log in.
 - Rename it to `CORPUSExtract.json`
 - Place it in: `backend/data/corpus/CORPUSExtract.json`
 
-### Step 3 — Download CIF Timetable data
+### Step 3 — Prepare your CIF timetable file
 - In Data Feeds, find **Full TTIS data** (timetable)
-- Download the `.MCA` file
-- Place it in the folder: `backend/data/cif/`
-  (put the file inside that folder — the app will find it automatically)
+- Download the `.MCA` or `.CIF` file
+- You can either:
+  - Place it in `backend/data/cif/` before starting the app (it will load automatically), **or**
+  - Upload it through the app's **CIF Upload** panel after the app is running (recommended)
 
 ### Step 4 — Download Mileage data
 - Register at: https://raildata.org.uk/ (Rail Data Marketplace)
@@ -281,7 +296,24 @@ You should see: `Local: http://localhost:3000`
 
 ## Using the App
 
-Once the app is open in your browser at http://localhost:3000:
+Once the app is open in your browser at http://localhost:3000, the workflow has six stages.
+
+---
+
+### Step 1 — Upload CIF (once)
+
+At the top of the page you will see a **CIF Status** bar:
+
+- **Green** (loaded): The backend already has a CIF file loaded — you can generate timetables immediately. The filename and schedule count are shown.
+- **Amber** (not loaded): Click **Upload CIF** and select your `.MCA` or `.CIF` file. The file is saved on the server and reused for all future queries without re-uploading.
+
+> Once uploaded, the CIF stays loaded even after you close the browser tab. You only need to upload it again if you want to use a newer CIF file.
+
+---
+
+### Step 2 — Generate Timetables
+
+Fill in the form:
 
 | Field | What to enter | Example |
 |-------|--------------|---------|
@@ -289,8 +321,6 @@ Once the app is open in your browser at http://localhost:3000:
 | **Operator Code** | 2-letter code for the train company | `VT` (Avanti), `GW` (GWR), `SW` (South Western) |
 | **Date Start** | The date you want timetables for | `2026-03-15` |
 | **Date End** | Leave blank for a single day, or enter an end date (max 31 days) | `2026-03-21` |
-| **Train Route** | A name you choose for your own reference | `London-Birmingham Main` |
-| **Route Variant** | A label for the stopping pattern | `Stopping` or `Express` |
 
 **Common operator codes:**
 
@@ -306,6 +336,7 @@ Once the app is open in your browser at http://localhost:3000:
 | `NT` | Northern Trains |
 | `TL` | Thameslink |
 | `SN` | Southern |
+| `GX` | Gatwick Express |
 
 **Steps:**
 1. Fill in all the fields
@@ -313,6 +344,100 @@ Once the app is open in your browser at http://localhost:3000:
 3. Click **Generate CSV** — the app processes the data (may take a few seconds)
 4. Once results appear, click **Download Timetable CSV** and/or **Download Route CSV**
 5. Open the downloaded `.csv` files in Excel, Google Sheets, or LibreOffice Calc
+
+---
+
+### Step 3 — Edit CSVs in Browser
+
+After generating, an **Excel-like editor** appears below the results for both the Timetable and Route CSVs.
+
+- **Click any cell** to edit it directly in the browser
+- **Select rows** using the checkbox column on the left
+- Click **Delete Selected** to remove chosen rows
+- Click **Save Changes** to write your edits back to the server (the downloaded CSV will reflect your changes)
+- Use **Ctrl+C / Ctrl+V** for copy and paste between cells
+
+> This is particularly useful for filling in the `train_type` and `cars` columns before running the Electric Pipeline (see Step 5).
+
+---
+
+### Step 4 — Results History
+
+All generated results are saved automatically and persist across server restarts. The **Results History** table shows all past runs with:
+
+- Station, operator, date range
+- Row counts for timetable and route
+- Buttons to **open the editor**, **download CSVs**, or **delete** the result
+
+You can also select multiple results (checkboxes) to combine them for the Electric Pipeline.
+
+---
+
+### Step 5 — Electric Energy Pipeline
+
+The Electric Pipeline calculates the half-hourly energy demand at each traction substation (TSS) served by the selected timetable results.
+
+**Before running, you need:**
+
+1. **Rolling Stock CSV** — contains energy parameters per train type. Columns:
+   - `train_type` — must match the value in your timetable's `train_type` column
+   - `mass_t` — train mass in tonnes
+   - `length_m` — train length in metres
+   - `drive_eff` — drive system efficiency (0–1)
+   - `regen_eff` — regenerative braking efficiency (0–1)
+   - `aux_kw` — auxiliary power draw in kW
+   - `max_speed_mph` — maximum speed
+
+2. **Station Points CSV** — maps each station (CRS code) to a TSS name. Columns:
+   - `crs` — 3-letter station code
+   - `tss` — name of the traction substation serving that station
+
+3. *(Optional)* **TSS Points CSV** — geographical reference for TSS locations (not currently used in calculations, reserved for future validation).
+
+**Steps:**
+1. Upload Rolling Stock and Station Points CSVs using the upload buttons in the **Electric Pipeline** panel
+2. In **Results History**, tick the checkboxes for the results you want to include (you can combine multiple date ranges or stations)
+3. Before running: use the in-browser editor to fill in `train_type` and `cars` columns in your timetable CSVs — these are not populated automatically by the timetable generator
+4. Click **Run Electric Pipeline**
+5. The results appear as one CSV file per TSS. Each file has:
+   - `date` and `dep_time` columns
+   - 48 half-hour energy columns (`0:30`, `1:00`, … `0:00`) in kWh
+   - A `Total Units` column summing all bins
+6. Click each TSS name to download its CSV
+
+> **Combining multiple results:** If you select more than one result, timetable rows are concatenated and route rows are deduplicated (identical `route_variant + stop sequence` patterns are merged automatically).
+
+---
+
+### Step 6 — Solar Analysis
+
+The Solar Pipeline models how much of the electric demand from Step 5 could be met by a rooftop or trackside solar installation.
+
+**You need two files:**
+
+1. **Half-hour Demand CSV** — one of the TSS output files from Step 5 (columns: `date`, `dep_time`, then 48 half-hour bin columns)
+
+2. **PVGIS Solar CSV** — hourly solar irradiance data downloaded from the EU PVGIS tool:
+   - Go to: https://re.jrc.ec.europa.eu/pvg_tools/en/
+   - Enter the location of the TSS or solar installation
+   - Select **Hourly Data**, choose a year, and download as CSV
+
+**Steps:**
+1. Upload your Demand CSV and PVGIS CSV in the **Solar Analysis** panel
+2. Click **Run Solar Analysis**
+3. Results appear:
+   - **Inline chart** — average daily demand vs. solar supply vs. used solar (24-hour profile)
+   - **Solar share %** — percentage of annual demand met by solar
+   - **Utilisation %** — percentage of available solar energy that was actually used (not spilled)
+4. Download links are provided for all 5 output files:
+
+| File | Contents |
+|------|----------|
+| `demand_hourly.xlsx` | Hourly demand in wide format (one column per hour) |
+| `pvgis_supply.xlsx` | Hourly solar supply matched to demand dates |
+| `avg_profile.xlsx` | Average 24-hour demand, supply, and used-solar profile |
+| `avg_profile.png` | Chart of the 24-hour average profile |
+| `solar_metrics.xlsx` | Annual and seasonal summary: solar share %, utilisation %, spillage % |
 
 ---
 
@@ -324,21 +449,34 @@ Once the app is open in your browser at http://localhost:3000:
 |--------|---------|
 | `date` | The date of the service (YYYY-MM-DD) |
 | `departure_time` | Time the train departs the station you searched (HH:MM:SS) |
-| `train_route` | The route name you typed in |
+| `route_variant` | Identifies the stopping pattern of this service |
+| `stop_type` | `stop` = train calls here; `pass` = train passes through without stopping |
 | `train_class` | First / Standard (from Darwin — blank if not available) |
 | `number_of_coaches` | How many coaches the train has (from Darwin — blank if not available) |
+| `train_type` | Train type for Electric Pipeline — **fill this in manually before running Electric** |
+| `cars` | Number of cars for Electric Pipeline — **fill this in manually before running Electric** |
 
 ### Route CSV
 
 | Column | Meaning |
 |--------|---------|
-| `route_variant` | The variant name you typed in |
+| `route_variant` | Identifies which stopping pattern this row belongs to |
 | `seq` | Stop number along the route (1 = first stop, 2 = second, etc.) |
 | `from_station` | 3-letter code of the station the train departs from |
 | `to_station` | 3-letter code of the next station |
+| `stop_type` | `stop` or `pass` for the `from_station` |
 | `distance_miles` | Rail distance between those two stations (blank if data unavailable) |
 | `run_min` | Minutes the train takes to travel between those two stations |
 | `wait_min` | Minutes the train waits at `from_station` before departing |
+
+### Electric TSS CSV (per substation)
+
+| Column | Meaning |
+|--------|---------|
+| `date` | Date in DD/MM/YYYY format |
+| `dep_time` | Departure time HH:MM |
+| `0:30` … `0:00` | Energy consumed in that half-hour bin (kWh) |
+| `Total Units` | Sum of all 48 half-hour bins for this service (kWh) |
 
 ---
 
@@ -362,7 +500,7 @@ When you are finished, go back to each terminal/command prompt window and press 
 - Node.js did not install correctly. Re-download and re-run the Node.js installer from https://nodejs.org/
 
 **"No services found" or empty CSV**
-- Check your CIF data file is in the `backend/data/cif/` folder
+- Check your CIF data file is uploaded (green CIF status bar at the top of the page)
 - Make sure the operator code is correct for the station and date you chose
 - Try a date within the validity range of your CIF file (usually covers ~3 months)
 
@@ -374,9 +512,18 @@ When you are finished, go back to each terminal/command prompt window and press 
 - Make sure both terminal windows are still running (you should see no errors in them)
 - Try http://127.0.0.1:3000 instead
 
-**train_class and number_of_coaches are always blank**
+**`train_class` and `number_of_coaches` are always blank**
 - This is normal if you haven't set a Darwin API token in `backend/.env`
 - Register at https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/ to get a free token
+
+**Electric Pipeline returns no TSS files**
+- Make sure Rolling Stock and Station Points CSVs are uploaded (green ticks in the Electric panel)
+- Make sure `train_type` and `cars` are filled in the timetable editor (they are blank by default)
+- Check that your Station Points CSV has CRS codes that match stations in your route CSV
+
+**Solar pipeline chart is blank or metrics show 0%**
+- Make sure the PVGIS CSV was downloaded from the PVGIS hourly data tool (not monthly averages)
+- Ensure the date range in the PVGIS file overlaps with dates in your demand CSV
 
 ---
 
@@ -390,6 +537,7 @@ All data used by this app comes exclusively from official Network Rail sources:
 | **Network Rail CORPUS** | Station names, CRS codes, TIPLOC codes | https://datafeeds.networkrail.co.uk/ |
 | **Network Rail NESA** | Official rail distances in miles | https://raildata.org.uk/ |
 | **Darwin OpenLDBWS** | Train class and coach numbers | https://realtime.nationalrail.co.uk/ |
+| **EU PVGIS** | Solar irradiance data (Solar pipeline only) | https://re.jrc.ec.europa.eu/pvg_tools/en/ |
 
 ---
 
@@ -397,15 +545,60 @@ All data used by this app comes exclusively from official Network Rail sources:
 
 ```
 Electric-Train-Web-App/
-├── backend/              # Python FastAPI API server
-│   ├── app/              # Application code
-│   ├── tests/            # 133 tests (unit + integration)
-│   ├── data/sample/      # Sample CSV outputs
-│   ├── requirements.txt  # Python dependencies
-│   └── .env.example      # Configuration template
-├── src/                  # Next.js frontend (website)
-├── package.json          # Node.js dependencies
-└── pyproject.toml        # Python test configuration
+├── backend/
+│   ├── app/
+│   │   ├── main.py                    # FastAPI application factory
+│   │   ├── config.py                  # Settings (env vars, data paths)
+│   │   ├── routers/
+│   │   │   ├── cif.py                 # POST /api/cif/upload, GET /api/cif/status
+│   │   │   ├── timetable.py           # Generate, download, list, delete, edit CSVs
+│   │   │   ├── electric.py            # Upload reference files, run energy pipeline
+│   │   │   ├── solar.py               # Run solar analysis
+│   │   │   └── health.py              # GET /api/health
+│   │   ├── services/
+│   │   │   ├── orchestrator.py        # Main timetable generation logic
+│   │   │   ├── cif_parser.py          # Network Rail CIF file parser
+│   │   │   ├── corpus_mapper.py       # CORPUS station data mapper
+│   │   │   ├── mileage_resolver.py    # NESA mileage lookup
+│   │   │   ├── darwin_enricher.py     # Darwin API enrichment
+│   │   │   ├── result_store.py        # Persistent result storage (Phase 2)
+│   │   │   ├── electric_pipeline.py   # Half-hourly TSS energy model (Phase 4)
+│   │   │   └── solar_pipeline.py      # Solar supply vs. demand model (Phase 5)
+│   │   └── security/
+│   │       └── middleware.py          # Rate limiting, size limits, security headers
+│   ├── tests/
+│   │   ├── unit/                      # Unit tests for individual services
+│   │   ├── integration/               # Integration tests
+│   │   └── e2e/
+│   │       └── test_full_pipeline.py  # End-to-end tests (31 tests, no network)
+│   ├── data/
+│   │   ├── cif/                       # CIF timetable files (uploaded or pre-placed)
+│   │   ├── corpus/                    # CORPUSExtract.json
+│   │   ├── mileage/                   # mileage.json
+│   │   ├── electric/                  # rolling_stock_energy.csv, station_points.csv
+│   │   ├── results/                   # Persistent generated results (auto-created)
+│   │   └── solar/                     # Solar pipeline outputs (auto-created)
+│   ├── requirements.txt               # Python dependencies
+│   └── .env.example                   # Configuration template
+├── src/
+│   ├── app/
+│   │   └── page.tsx                   # Main UI (all panels)
+│   ├── components/
+│   │   └── CsvEditor.tsx              # In-browser Excel-like CSV editor (Phase 3)
+│   └── lib/
+│       └── api.ts                     # TypeScript API client
+├── package.json                       # Node.js dependencies (includes react-data-grid)
+└── pyproject.toml                     # Python test configuration
+```
+
+### Running the tests
+
+```bash
+# All tests (unit + integration + e2e) — requires no network or external files
+python -m pytest backend/tests/ -v
+
+# End-to-end tests only
+python -m pytest backend/tests/e2e/ -v
 ```
 
 Developer docs: [Architecture](backend/ARCHITECTURE.md) · [Source Mapping](backend/SOURCE_MAPPING.md) · [CIF-Darwin Matching](backend/CIF_DARWIN_MATCHING.md) · [Security Report](backend/SECURITY_REPORT.md)
