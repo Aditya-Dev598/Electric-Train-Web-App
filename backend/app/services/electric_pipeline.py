@@ -136,7 +136,8 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_energy_params(path: Path, train_types: list[str]) -> pd.DataFrame:
     if path.exists():
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, encoding="utf-8-sig")
+        df.columns = df.columns.str.strip()
         required = {"train_type", "kwh_per_km_per_car", "aux_kw_per_car"}
         missing = sorted(required - set(df.columns))
         if missing:
@@ -334,9 +335,12 @@ def run_pipeline(
     Returns:
         Dict of TSS name (safe filename stem) → CSV string with 48 half-hour kWh bins.
     """
-    tt = pd.read_csv(io.StringIO(timetable_csv))
-    route = pd.read_csv(io.StringIO(route_csv))
-    stations = pd.read_csv(station_points_path)
+    tt = pd.read_csv(io.StringIO(timetable_csv.lstrip("\ufeff")))
+    tt.columns = tt.columns.str.strip()
+    route = pd.read_csv(io.StringIO(route_csv.lstrip("\ufeff")))
+    route.columns = route.columns.str.strip()
+    stations = pd.read_csv(station_points_path, encoding="utf-8-sig")
+    stations.columns = stations.columns.str.strip()
 
     for col in ["route_variant", "date", "dep_time", "train_type", "cars"]:
         if col not in tt.columns and col not in (
@@ -375,7 +379,10 @@ def run_pipeline(
 
 def combine_csvs(csv_texts: list[str]) -> str:
     """Combine multiple timetable CSV texts, removing exact duplicate rows."""
-    frames = [pd.read_csv(io.StringIO(t)) for t in csv_texts if t.strip()]
+    frames = [
+        pd.read_csv(io.StringIO(t.lstrip("\ufeff")))
+        for t in csv_texts if t.strip()
+    ]
     if not frames:
         return ""
     combined = pd.concat(frames, ignore_index=True)
@@ -398,7 +405,8 @@ def combine_route_csvs(csv_texts: list[str]) -> str:
     for text in csv_texts:
         if not text.strip():
             continue
-        frame = pd.read_csv(io.StringIO(text))
+        frame = pd.read_csv(io.StringIO(text.lstrip("\ufeff")))
+        frame.columns = frame.columns.str.strip()
         for _rv, group in frame.groupby("route_variant"):
             g = group.sort_values("seq")
             fp = tuple(zip(

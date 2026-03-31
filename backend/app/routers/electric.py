@@ -149,11 +149,12 @@ async def run_electric(req: RunRequest, request: Request) -> JSONResponse:
         timetable_parts.append(tt_path.read_text(encoding="utf-8"))
         route_parts.append(rt_path.read_text(encoding="utf-8"))
 
-    combined_tt = combine_csvs(timetable_parts)
-    combined_route = combine_route_csvs(route_parts)
-
-    # Run pipeline (CPU-bound but typically fast)
+    # Run pipeline — all pre-processing + pipeline inside one try/except so that
+    # any exception (BOM in CSV, missing column, etc.) returns descriptive JSON
+    # rather than Starlette's plain-text "Internal Server Error".
     try:
+        combined_tt = combine_csvs(timetable_parts)
+        combined_route = combine_route_csvs(route_parts)
         tss_outputs = run_pipeline(
             timetable_csv=combined_tt,
             route_csv=combined_route,
