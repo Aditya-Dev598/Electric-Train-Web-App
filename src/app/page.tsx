@@ -640,6 +640,7 @@ export default function Home() {
                     <th>Date End</th>
                     <th>Rows</th>
                     <th>Generated</th>
+                    <th>Downloads</th>
                     <th>Edit</th>
                     <th></th>
                   </tr>
@@ -660,6 +661,26 @@ export default function Home() {
                       <td>{r.date_end}</td>
                       <td>{r.timetable_rows}</td>
                       <td style={{ fontSize: '0.8rem' }}>{new Date(r.generated_at).toLocaleString()}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'nowrap' }}>
+                          <a
+                            className="btn btn-download"
+                            href={getTimetableDownloadUrl(r.generation_id)}
+                            download="timetable.csv"
+                            style={{ padding: '0.15rem 0.45rem', fontSize: '0.75rem' }}
+                          >
+                            TT
+                          </a>
+                          <a
+                            className="btn btn-download"
+                            href={getRouteDownloadUrl(r.generation_id)}
+                            download="route.csv"
+                            style={{ padding: '0.15rem 0.45rem', fontSize: '0.75rem' }}
+                          >
+                            Route
+                          </a>
+                        </div>
+                      </td>
                       <td>
                         <button
                           type="button"
@@ -763,6 +784,53 @@ export default function Home() {
               </label>
             </div>
           ))}
+        </div>
+
+        {/* Data source mode banner */}
+        <div style={{
+          padding: '0.6rem 0.9rem',
+          borderRadius: '0.375rem',
+          marginBottom: '0.75rem',
+          fontSize: '0.85rem',
+          background: selectedResultIds.size > 0
+            ? 'var(--highlight-bg, #eff6ff)'
+            : (electricStatus?.timetable && electricStatus?.route)
+              ? 'var(--success-bg, #f0fdf4)'
+              : 'var(--warning-bg, #fffbeb)',
+          border: '1px solid',
+          borderColor: selectedResultIds.size > 0
+            ? 'var(--info-border, #bfdbfe)'
+            : (electricStatus?.timetable && electricStatus?.route)
+              ? 'var(--success-border, #bbf7d0)'
+              : 'var(--warning-border, #fde68a)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          flexWrap: 'wrap',
+        }}>
+          {selectedResultIds.size > 0 ? (
+            <>
+              <span>
+                <strong>Source:</strong> {selectedResultIds.size} result{selectedResultIds.size !== 1 ? 's' : ''} selected from History — station names must match your station_points CSV.
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem', marginLeft: 'auto' }}
+                onClick={() => setSelectedResultIds(new Set())}
+              >
+                Clear Selection (use direct uploads)
+              </button>
+            </>
+          ) : (electricStatus?.timetable && electricStatus?.route) ? (
+            <span>
+              <strong>Source:</strong> Directly uploaded timetable.csv + route.csv
+            </span>
+          ) : (
+            <span style={{ color: 'var(--warning, #b45309)' }}>
+              ⚠ No data source — select results from History above, or upload Timetable + Route CSVs in the slots below.
+            </span>
+          )}
         </div>
 
         <div className="button-row">
