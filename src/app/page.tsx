@@ -12,8 +12,10 @@ import {
   StoredResult,
   ElectricStatus,
   ElectricRunResult,
+  ElectricRunMeta,
   MergeResult,
   SolarRunResult,
+  SolarRunMeta,
   validateInputs,
   startGenerate,
   getGenerateStatus,
@@ -24,8 +26,10 @@ import {
   getElectricStatus,
   uploadElectricFile,
   runElectricPipeline,
+  listElectricRuns,
   mergeResults,
   runSolarPipeline,
+  listSolarRuns,
   getTimetableDownloadUrl,
   getRouteDownloadUrl,
   getDebugDownloadUrl,
@@ -79,11 +83,20 @@ export default function Home() {
   const [merging, setMerging] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
 
+  // ── Electric runs history ─────────────────────────────────────────────────
+  const [electricRuns, setElectricRuns] = useState<ElectricRunMeta[]>([]);
+
+  // ── Solar runs history ────────────────────────────────────────────────────
+  const [solarRuns, setSolarRuns] = useState<SolarRunMeta[]>([]);
+  const [expandedSolarRun, setExpandedSolarRun] = useState<string | null>(null);
+
   // ── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     getCIFStatus().then(setCifStatus).catch(() => {});
     loadStoredResults();
     getElectricStatus().then(setElectricStatus).catch(() => {});
+    listElectricRuns().then(setElectricRuns).catch(() => {});
+    listSolarRuns().then(setSolarRuns).catch(() => {});
   }, []);
 
   const loadStoredResults = () => {
@@ -219,6 +232,7 @@ export default function Home() {
     try {
       const res = await runSolarPipeline(solarDemandFile, solarPvgisFile);
       setSolarResult(res);
+      listSolarRuns().then(setSolarRuns).catch(() => {});
     } catch (e) {
       setSolarError(e instanceof Error ? e.message : 'Solar pipeline failed');
     } finally {
@@ -242,6 +256,7 @@ export default function Home() {
     try {
       const res = await runElectricPipeline(Array.from(selectedResultIds));
       setElectricResult(res);
+      listElectricRuns().then(setElectricRuns).catch(() => {});
     } catch (e) {
       setElectricError(e instanceof Error ? e.message : 'Electric pipeline failed');
     } finally {
@@ -759,6 +774,49 @@ export default function Home() {
             </div>
           </div>
         )}
+
+        {/* ── Electric runs history ─────────────────────────────────── */}
+        {electricRuns.length > 0 && (
+          <div style={{ marginTop: '1.25rem' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem' }}>Past Electric Runs</h3>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Run</th>
+                    <th>TSS files</th>
+                    <th>Date</th>
+                    <th>Downloads</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {electricRuns.map((run, i) => (
+                    <tr key={run.run_id}>
+                      <td style={{ fontSize: '0.8rem', color: 'var(--text-muted, #6b7280)' }}>#{electricRuns.length - i}</td>
+                      <td>{run.tss_files.length}</td>
+                      <td style={{ fontSize: '0.8rem' }}>{new Date(run.created_at).toLocaleString()}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                          {run.tss_files.map(f => (
+                            <a
+                              key={f}
+                              className="btn btn-download"
+                              href={getElectricOutputUrl(run.run_id, f)}
+                              download={f}
+                              style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}
+                            >
+                              {f}
+                            </a>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
       {/* ── Solar Pipeline ────────────────────────────────────────────── */}
       <div className="card">
@@ -819,8 +877,6 @@ export default function Home() {
               Analysis complete — Solar share: <strong>{solarResult.solar_share_pct.toFixed(1)}%</strong> &nbsp;|&nbsp;
               Utilisation: <strong>{solarResult.utilisation_pct.toFixed(1)}%</strong>
             </div>
-
-            {/* Inline plot */}
             <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
               <img
                 src={`data:image/png;base64,${solarResult.avg_profile_png_b64}`}
@@ -828,8 +884,6 @@ export default function Home() {
                 style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
               />
             </div>
-
-            {/* Download links */}
             <div className="button-row" style={{ flexWrap: 'wrap' }}>
               {solarResult.files.map(f => (
                 <a
@@ -843,6 +897,50 @@ export default function Home() {
                 </a>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ── Solar runs history ──────────────────────────────────────── */}
+        {solarRuns.length > 0 && (
+          <div style={{ marginTop: '1.25rem' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.5rem' }}>Past Solar Runs</h3>
+            {solarRuns.map((run, i) => (
+              <div key={run.run_id} style={{ marginBottom: '0.75rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '0.375rem', overflow: 'hidden' }}>
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0.75rem', background: 'var(--card-bg, #f9fafb)', cursor: 'pointer', flexWrap: 'wrap' }}
+                  onClick={() => setExpandedSolarRun(expandedSolarRun === run.run_id ? null : run.run_id)}
+                >
+                  <span style={{ fontWeight: 500, fontSize: '0.85rem' }}>#{solarRuns.length - i} — {new Date(run.created_at).toLocaleString()}</span>
+                  <span style={{ fontSize: '0.85rem' }}>Solar share: <strong>{run.solar_share_pct.toFixed(1)}%</strong></span>
+                  <span style={{ fontSize: '0.85rem' }}>Utilisation: <strong>{run.utilisation_pct.toFixed(1)}%</strong></span>
+                  <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-muted, #6b7280)' }}>{expandedSolarRun === run.run_id ? '▲ collapse' : '▼ expand'}</span>
+                </div>
+                {expandedSolarRun === run.run_id && (
+                  <div style={{ padding: '0.75rem' }}>
+                    <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+                      <img
+                        src={`data:image/png;base64,${run.avg_profile_png_b64}`}
+                        alt="Average demand/supply profile"
+                        style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
+                      />
+                    </div>
+                    <div className="button-row" style={{ flexWrap: 'wrap' }}>
+                      {run.files.map(f => (
+                        <a
+                          key={f}
+                          className="btn btn-download"
+                          href={getSolarOutputUrl(run.run_id, f)}
+                          download={f}
+                          style={{ fontSize: '0.82rem' }}
+                        >
+                          {f}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>

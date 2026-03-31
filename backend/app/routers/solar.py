@@ -8,8 +8,10 @@ Workflow:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -61,6 +63,8 @@ async def run_solar(
         raise HTTPException(status_code=422, detail=str(exc))
 
     run_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    avg_png_b64 = base64.b64encode(result.avg_profile_png).decode()
 
     outputs: dict[str, bytes] = {
         "demand_hourly.xlsx": result.demand_hourly_xlsx,
@@ -79,6 +83,17 @@ async def run_solar(
     out_dir.mkdir(parents=True, exist_ok=True)
     for fname, data in outputs.items():
         (out_dir / fname).write_bytes(data)
+    (out_dir / "metadata.json").write_text(
+        json.dumps({
+            "run_id": run_id,
+            "solar_share_pct": result.solar_share_pct,
+            "utilisation_pct": result.utilisation_pct,
+            "files": list(outputs.keys()),
+            "avg_profile_png_b64": avg_png_b64,
+            "created_at": created_at,
+        }),
+        encoding="utf-8",
+    )
 
     logger.info("Solar run %s complete: share=%.1f%% util=%.1f%%",
                 run_id, result.solar_share_pct, result.utilisation_pct)
@@ -88,9 +103,28 @@ async def run_solar(
         "solar_share_pct": result.solar_share_pct,
         "utilisation_pct": result.utilisation_pct,
         "files": list(outputs.keys()),
-        # Embed PNG as base64 so the frontend can show it inline without a second request
-        "avg_profile_png_b64": base64.b64encode(result.avg_profile_png).decode(),
+        "avg_profile_png_b64": avg_png_b64,
+        "created_at": created_at,
     })
+
+
+@router.get("/runs")
+async def list_solar_runs(request: Request) -> JSONResponse:
+    """Return metadata for all past Solar pipeline runs, newest first."""
+    solar_dir = _get_solar_dir(request.app.state)
+    if not solar_dir.exists():
+        return JSONResponse(content=[])
+    results = []
+    for d in sorted(solar_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not d.is_dir():
+            continue
+        meta_path = d / "metadata.json"
+        if meta_path.exists():
+            try:
+                results.append(json.loads(meta_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+    return JSONResponse(content=results)
 
 
 @router.get("/output/{run_id}/{filename}")

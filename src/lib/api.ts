@@ -240,6 +240,19 @@ export async function uploadElectricFile(
 export interface ElectricRunResult {
   run_id: string;
   tss_files: string[];
+  created_at?: string;
+}
+
+export interface ElectricRunMeta {
+  run_id: string;
+  tss_files: string[];
+  created_at: string;
+}
+
+export async function listElectricRuns(): Promise<ElectricRunMeta[]> {
+  const resp = await fetch(`${API_BASE}/api/electric/runs`);
+  if (!resp.ok) throw new Error(`Failed to list electric runs: ${resp.status}`);
+  return await resp.json();
 }
 
 export async function runElectricPipeline(resultIds: string[] = []): Promise<ElectricRunResult> {
@@ -288,6 +301,22 @@ export interface SolarRunResult {
   utilisation_pct: number;
   files: string[];
   avg_profile_png_b64: string;
+  created_at?: string;
+}
+
+export interface SolarRunMeta {
+  run_id: string;
+  solar_share_pct: number;
+  utilisation_pct: number;
+  files: string[];
+  avg_profile_png_b64: string;
+  created_at: string;
+}
+
+export async function listSolarRuns(): Promise<SolarRunMeta[]> {
+  const resp = await fetch(`${API_BASE}/api/solar/runs`);
+  if (!resp.ok) throw new Error(`Failed to list solar runs: ${resp.status}`);
+  return await resp.json();
 }
 
 export async function runSolarPipeline(demandCsv: File, pvgisCsv: File): Promise<SolarRunResult> {

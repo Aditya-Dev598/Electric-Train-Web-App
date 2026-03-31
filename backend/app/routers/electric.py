@@ -13,6 +13,7 @@ Workflow:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -176,19 +177,46 @@ async def run_electric(req: RunRequest, request: Request) -> JSONResponse:
 
     run_id = str(uuid.uuid4())
     _electric_runs[run_id] = tss_outputs
+    tss_files = [f"{name}.csv" for name in tss_outputs]
+    created_at = datetime.now(timezone.utc).isoformat()
 
-    # Persist to disk as well
+    # Persist to disk
     out_dir = electric_dir / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     for tss_name, csv_text in tss_outputs.items():
         (out_dir / f"{tss_name}.csv").write_text(csv_text, encoding="utf-8")
+    (out_dir / "metadata.json").write_text(
+        json.dumps({"run_id": run_id, "tss_files": tss_files, "created_at": created_at}),
+        encoding="utf-8",
+    )
 
     logger.info("Electric run %s: %d TSS outputs", run_id, len(tss_outputs))
 
     return JSONResponse(content={
         "run_id": run_id,
-        "tss_files": [f"{name}.csv" for name in tss_outputs],
+        "tss_files": tss_files,
+        "created_at": created_at,
     })
+
+
+@router.get("/runs")
+async def list_electric_runs(request: Request) -> JSONResponse:
+    """Return metadata for all past Electric pipeline runs, newest first."""
+    electric_dir = _get_electric_dir(request.app.state)
+    runs_dir = electric_dir / "runs"
+    if not runs_dir.exists():
+        return JSONResponse(content=[])
+    results = []
+    for d in sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not d.is_dir():
+            continue
+        meta_path = d / "metadata.json"
+        if meta_path.exists():
+            try:
+                results.append(json.loads(meta_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+    return JSONResponse(content=results)
 
 
 @router.post("/merge")
