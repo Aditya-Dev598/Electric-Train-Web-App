@@ -180,32 +180,41 @@ copy backend\.env.example backend\.env
 ```
 Now open the file `backend\.env` in Notepad and fill in your Darwin token if you have one (find the line `DARWIN_API_TOKEN=` and paste your token after the `=`). Save and close.
 
-**2. Install backend (Python) packages:**
+**2. Create a virtual environment for the backend** (keeps Python packages tidy):
+```
+python -m venv venv
+venv\Scripts\activate
+```
+You should see `(venv)` appear at the start of your prompt. This means the virtual environment is active.
+
+**3. Install backend (Python) packages:**
 ```
 pip install -r backend\requirements.txt
 ```
 This downloads the required Python packages. It may take a minute or two.
 
-**3. Install frontend (website) packages:**
+**4. Install frontend (website) packages:**
 ```
 npm install
 ```
 This may also take a minute or two.
 
-**4. Start the backend** (leave this window open):
+**5. Start the backend** (leave this window open):
 ```
 python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 You should see a message: `Application startup complete.`
 
-**5. Open a second Command Prompt window**, navigate to the same folder again, then start the frontend:
+> Next time you start the app, you need to activate the virtual environment again (`venv\Scripts\activate`) before running the uvicorn command.
+
+**7. Open a second Command Prompt window**, navigate to the same folder again, then start the frontend:
 ```
 cd C:\Users\YourName\Downloads\Electric-Train-Web-App
 npm run dev
 ```
 You should see: `Local: http://localhost:3000`
 
-**6. Open your web browser** and go to: http://localhost:3000
+**8. Open your web browser** and go to: http://localhost:3000
 
 ---
 
@@ -225,30 +234,39 @@ cp backend/.env.example backend/.env
 ```
 Open `backend/.env` in TextEdit to add your Darwin token if you have one. Find the line `DARWIN_API_TOKEN=` and paste your token after the `=`. Save the file.
 
-**2. Install backend (Python) packages:**
+**2. Create a virtual environment for the backend:**
 ```
-pip3 install -r backend/requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+```
+You should see `(venv)` appear at the start of your prompt.
+
+**3. Install backend (Python) packages:**
+```
+pip install -r backend/requirements.txt
 ```
 
-**3. Install frontend (website) packages:**
+**4. Install frontend (website) packages:**
 ```
 npm install
 ```
 
-**4. Start the backend** (leave this Terminal window open):
+**5. Start the backend** (leave this Terminal window open):
 ```
 python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 You should see: `Application startup complete.`
 
-**5. Open a second Terminal window** (`Cmd + T` for a new tab), navigate to the same folder, then start the frontend:
+> Next time you start the app, activate the virtual environment first: `source venv/bin/activate`
+
+**6. Open a second Terminal window** (`Cmd + T` for a new tab), navigate to the same folder, then start the frontend:
 ```
 cd ~/Downloads/Electric-Train-Web-App
 npm run dev
 ```
 You should see: `Local: http://localhost:3000`
 
-**6. Open Safari or Chrome** and go to: http://localhost:3000
+**7. Open Safari or Chrome** and go to: http://localhost:3000
 
 ---
 
@@ -267,30 +285,39 @@ cp backend/.env.example backend/.env
 ```
 Open `backend/.env` in a text editor (e.g. `nano backend/.env`) to add your Darwin token if you have one. Find `DARWIN_API_TOKEN=` and paste your token after the `=`. Press `Ctrl+X`, then `Y`, then Enter to save.
 
-**2. Install backend (Python) packages:**
+**2. Create a virtual environment for the backend:**
 ```
-pip3 install -r backend/requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+```
+You should see `(venv)` appear at the start of your prompt.
+
+**3. Install backend (Python) packages:**
+```
+pip install -r backend/requirements.txt
 ```
 
-**3. Install frontend (website) packages:**
+**4. Install frontend (website) packages:**
 ```
 npm install
 ```
 
-**4. Start the backend** (leave this terminal window open):
+**5. Start the backend** (leave this terminal window open):
 ```
 python3 -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
 ```
 You should see: `Application startup complete.`
 
-**5. Open a second terminal window/tab** and navigate to the same folder, then start the frontend:
+> Next time you start the app, activate the virtual environment first: `source venv/bin/activate`
+
+**6. Open a second terminal window/tab** and navigate to the same folder, then start the frontend:
 ```
 cd ~/Downloads/Electric-Train-Web-App
 npm run dev
 ```
 You should see: `Local: http://localhost:3000`
 
-**6. Open your web browser** and go to: http://localhost:3000
+**7. Open your web browser** and go to: http://localhost:3000
 
 ---
 
@@ -305,7 +332,8 @@ Once the app is open in your browser at http://localhost:3000, the workflow has 
 At the top of the page you will see a **CIF Status** bar:
 
 - **Green** (loaded): The backend already has a CIF file loaded — you can generate timetables immediately. The filename and schedule count are shown.
-- **Amber** (not loaded): Click **Upload CIF** and select your `.MCA` or `.CIF` file. The file is saved on the server and reused for all future queries without re-uploading.
+- **Amber with spinner**: The CIF file is currently being parsed — wait until it turns green (large files can take 1–3 minutes).
+- **Amber** (not loaded): Click **Upload CIF to Server** and select your `.MCA` or `.CIF` file. The file is saved on the server and reused for all future queries without re-uploading. A spinner will appear while it parses.
 
 > Once uploaded, the CIF stays loaded even after you close the browser tab. You only need to upload it again if you want to use a newer CIF file.
 > The server accepts CIF files up to **2 GB** — the full Network Rail `toc-full.CIF` is typically around 1 GB.
@@ -399,15 +427,13 @@ The Electric Pipeline calculates the half-hourly energy demand at each traction 
    - `crs` — 3-letter station code
    - `tss` — name of the traction substation serving that station
 
-3. *(Optional)* **TSS Points CSV** — geographical reference for TSS locations (not currently used in calculations, reserved for future validation).
-
 **Steps:**
 1. Upload Rolling Stock and Station Points CSVs using the upload buttons in the **Electric Pipeline** panel
 2. Choose your data source — you have two options:
    - **From Results History:** tick the checkboxes for the results you want (one or more), or use **Merge Selected** first to combine them into one editable result
    - **Direct upload:** upload a Timetable CSV and a Route CSV directly using the **Timetable CSV** and **Route CSV** upload slots in the Electric panel (useful for externally prepared files)
 3. Before running: use the in-browser editor to fill in `train_type` and `cars` columns in your timetable CSV — these are not populated automatically by the timetable generator
-4. Click **Run Electric Pipeline** (the button label shows which mode is active)
+4. Click **Run Electric Pipeline** (the button label shows which mode is active). A progress spinner appears — the pipeline runs in the background and typically finishes in 30–120 seconds. The page stays responsive throughout.
 5. The results appear as one CSV file per TSS. Each file has:
    - `date` and `dep_time` columns
    - 48 half-hour energy columns (`0:30`, `1:00`, … `0:00`) in kWh
