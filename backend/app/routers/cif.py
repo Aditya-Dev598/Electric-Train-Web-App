@@ -81,7 +81,7 @@ async def upload_cif(
 
     # Reload the shared CIF parser instance
     state = request.app.state
-    state.cif_parser.schedules = temp_parser.schedules
+    state.cif_parser._schedules = temp_parser._schedules
     state.cif_parser._header = getattr(temp_parser, "_header", None)
 
     # Store metadata for /status
