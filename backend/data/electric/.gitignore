@@ -1,0 +1,3 @@
+# Ignore user-uploaded reference files and pipeline run outputs
+*.csv
+runs/
