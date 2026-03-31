@@ -5,9 +5,13 @@ Initializes all data sources, configures middleware, and mounts routes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,12 +39,92 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_cif_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cif-loader")
+
+
+def _load_cif_from_disk(cif_parser: CIFParser, cif_data_path: str) -> None:
+    """Blocking CIF load — runs in a background thread so startup is instant."""
+    uploaded = Path(cif_data_path) / "uploaded.CIF"
+    try:
+        if uploaded.is_file():
+            cif_parser.parse_file(str(uploaded))
+            logger.info("CIF preloaded from uploaded.CIF: %d schedules", len(cif_parser.schedules))
+        elif os.path.isdir(cif_data_path):
+            cif_parser.parse_directory(cif_data_path)
+            logger.info("CIF loaded from directory: %d schedules", len(cif_parser.schedules))
+        elif os.path.isfile(cif_data_path):
+            cif_parser.parse_file(cif_data_path)
+            logger.info("CIF loaded: %d schedules", len(cif_parser.schedules))
+        else:
+            logger.info("No CIF file found — upload one via the web UI")
+    except Exception as exc:
+        logger.warning("CIF background load failed: %s", exc)
+
 
 def create_app() -> FastAPI:
     """Application factory: create and configure the FastAPI app."""
     settings = get_settings()
 
+    # --- Initialise data sources (fast, synchronous) ---
+    audit = AuditLogger()
+
+    corpus = CorpusMapper(settings.corpus_data_path)
+    try:
+        corpus.load()
+        logger.info("CORPUS loaded successfully")
+    except Exception as exc:
+        logger.warning("Failed to load CORPUS: %s", exc)
+
+    # CIF parser starts empty; the actual file is loaded in the background
+    # startup task so the server is reachable immediately even for large files.
+    cif_parser = CIFParser()
+
+    mileage = MileageResolver(settings.mileage_data_path)
+    try:
+        mileage.load()
+        logger.info("Mileage data loaded successfully")
+    except Exception as exc:
+        logger.warning("Failed to load mileage data: %s", exc)
+
+    darwin = DarwinEnricher(
+        api_url=settings.darwin_api_url,
+        api_token=settings.darwin_api_token,
+        timeout=settings.darwin_timeout_seconds,
+        max_retries=settings.darwin_max_retries,
+        audit=audit,
+    )
+
+    orchestrator = Orchestrator(
+        corpus=corpus,
+        cif_parser=cif_parser,
+        mileage=mileage,
+        darwin=darwin,
+        audit=audit,
+    )
+
+    result_store = ResultStore(settings.results_data_path)
+
+    # --- Lifespan: kick off CIF loading after server is ready ---
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        loop = asyncio.get_running_loop()
+        logger.info("Server ready — loading CIF in background thread…")
+        cif_future = loop.run_in_executor(
+            _cif_executor,
+            _load_cif_from_disk,
+            cif_parser,
+            settings.cif_data_path,
+        )
+        yield  # server is up and accepting connections while CIF loads
+        # On shutdown, give the loader a moment to finish cleanly
+        try:
+            await asyncio.wait_for(asyncio.shield(cif_future), timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+
+    # --- Build app ---
     app = FastAPI(
+        lifespan=lifespan,
         title="UK Rail Timetable Generator",
         description=(
             "Generate railway timetable and route CSV outputs using "
@@ -51,7 +135,7 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc",
     )
 
-    # --- Middleware (order matters: last added = first executed) ---
+    # Middleware (order matters: last added = first executed)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         RequestSizeLimitMiddleware,
@@ -70,67 +154,7 @@ def create_app() -> FastAPI:
         max_age=3600,
     )
 
-    # --- Initialize data sources ---
-    audit = AuditLogger()
-
-    # CORPUS
-    corpus = CorpusMapper(settings.corpus_data_path)
-    try:
-        corpus.load()
-        logger.info("CORPUS loaded successfully")
-    except Exception as exc:
-        logger.warning("Failed to load CORPUS: %s", exc)
-
-    # CIF — prefer the user-uploaded file if it already exists on disk
-    cif_parser = CIFParser()
-    try:
-        from pathlib import Path as _Path
-        _uploaded = _Path(settings.cif_data_path) / "uploaded.CIF"
-        if _uploaded.is_file():
-            # Fast path: load only the previously-uploaded file, skip LFS pointers
-            cif_parser.parse_file(str(_uploaded))
-            logger.info("CIF preloaded from uploaded.CIF: %d schedules", len(cif_parser.schedules))
-        elif os.path.isdir(settings.cif_data_path):
-            cif_parser.parse_directory(settings.cif_data_path)
-            logger.info("CIF loaded from directory: %d schedules", len(cif_parser.schedules))
-        elif os.path.isfile(settings.cif_data_path):
-            cif_parser.parse_file(settings.cif_data_path)
-            logger.info("CIF loaded: %d schedules", len(cif_parser.schedules))
-        else:
-            logger.info("No CIF file found — upload one via the web UI")
-    except Exception as exc:
-        logger.warning("Failed to load CIF data: %s", exc)
-
-    # Mileage
-    mileage = MileageResolver(settings.mileage_data_path)
-    try:
-        mileage.load()
-        logger.info("Mileage data loaded successfully")
-    except Exception as exc:
-        logger.warning("Failed to load mileage data: %s", exc)
-
-    # Darwin
-    darwin = DarwinEnricher(
-        api_url=settings.darwin_api_url,
-        api_token=settings.darwin_api_token,
-        timeout=settings.darwin_timeout_seconds,
-        max_retries=settings.darwin_max_retries,
-        audit=audit,
-    )
-
-    # Orchestrator
-    orchestrator = Orchestrator(
-        corpus=corpus,
-        cif_parser=cif_parser,
-        mileage=mileage,
-        darwin=darwin,
-        audit=audit,
-    )
-
-    # Result store (persists across restarts)
-    result_store = ResultStore(settings.results_data_path)
-
-    # Store in app state for access from routes
+    # Store state
     app.state.corpus = corpus
     app.state.cif_parser = cif_parser
     app.state.mileage = mileage
@@ -140,7 +164,7 @@ def create_app() -> FastAPI:
     app.state.result_store = result_store
     app.state.settings = settings
 
-    # --- Routes ---
+    # Routes
     app.include_router(cif.router)
     app.include_router(timetable.router)
     app.include_router(electric.router)
