@@ -81,14 +81,23 @@ def create_app() -> FastAPI:
     except Exception as exc:
         logger.warning("Failed to load CORPUS: %s", exc)
 
-    # CIF
+    # CIF — prefer the user-uploaded file if it already exists on disk
     cif_parser = CIFParser()
     try:
-        if os.path.isdir(settings.cif_data_path):
+        from pathlib import Path as _Path
+        _uploaded = _Path(settings.cif_data_path) / "uploaded.CIF"
+        if _uploaded.is_file():
+            # Fast path: load only the previously-uploaded file, skip LFS pointers
+            cif_parser.parse_file(str(_uploaded))
+            logger.info("CIF preloaded from uploaded.CIF: %d schedules", len(cif_parser.schedules))
+        elif os.path.isdir(settings.cif_data_path):
             cif_parser.parse_directory(settings.cif_data_path)
+            logger.info("CIF loaded from directory: %d schedules", len(cif_parser.schedules))
         elif os.path.isfile(settings.cif_data_path):
             cif_parser.parse_file(settings.cif_data_path)
-        logger.info("CIF loaded: %d schedules", len(cif_parser.schedules))
+            logger.info("CIF loaded: %d schedules", len(cif_parser.schedules))
+        else:
+            logger.info("No CIF file found — upload one via the web UI")
     except Exception as exc:
         logger.warning("Failed to load CIF data: %s", exc)
 
