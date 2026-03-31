@@ -108,7 +108,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         loop = asyncio.get_running_loop()
-        logger.info("Server ready — loading CIF in background thread…")
+        logger.info("Starting CIF background load (server already accepting connections)…")
         cif_future = loop.run_in_executor(
             _cif_executor,
             _load_cif_from_disk,

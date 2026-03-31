@@ -90,6 +90,7 @@ export interface GenerateParams extends ValidateParams {
 
 export interface CIFStatus {
   loaded: boolean;
+  loading: boolean;
   filename: string | null;
   schedule_count: number;
   loaded_at: string | null;
@@ -124,9 +125,10 @@ export async function getCIFStatus(): Promise<CIFStatus> {
   return await resp.json();
 }
 
-export async function uploadCIF(file: File): Promise<CIFStatus> {
+export async function uploadCIF(file: File): Promise<{ loading: boolean; filename: string }> {
   const body = new FormData();
   body.append('cif_file', file);
+  // Returns 202 immediately — backend parses in background
   const resp = await fetch(`${API_BASE}/api/cif/upload`, { method: 'POST', body });
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: 'Unknown error' }));
@@ -213,7 +215,6 @@ export async function deleteResult(generationId: string): Promise<void> {
 export interface ElectricStatus {
   rolling_stock: boolean;
   station_points: boolean;
-  tss_points: boolean;
   timetable: boolean;
   route: boolean;
 }
@@ -225,7 +226,7 @@ export async function getElectricStatus(): Promise<ElectricStatus> {
 }
 
 export async function uploadElectricFile(
-  fileType: 'rolling_stock' | 'station_points' | 'tss_points' | 'timetable' | 'route',
+  fileType: 'rolling_stock' | 'station_points' | 'timetable' | 'route',
   file: File,
 ): Promise<void> {
   const body = new FormData();
@@ -255,7 +256,7 @@ export async function listElectricRuns(): Promise<ElectricRunMeta[]> {
   return await resp.json();
 }
 
-export async function runElectricPipeline(resultIds: string[] = []): Promise<ElectricRunResult> {
+export async function runElectricPipeline(resultIds: string[] = []): Promise<{ job_id: string }> {
   const resp = await fetch(`${API_BASE}/api/electric/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -264,6 +265,22 @@ export async function runElectricPipeline(resultIds: string[] = []): Promise<Ele
   if (!resp.ok) {
     const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
     throw new Error(d.detail || `Electric run failed: ${resp.status}`);
+  }
+  return await resp.json();
+}
+
+export interface ElectricJobStatus {
+  status: 'processing' | 'done' | 'error';
+  run_id?: string;
+  tss_files?: string[];
+  created_at?: string;
+  error?: string;
+}
+
+export async function getElectricJobStatus(jobId: string): Promise<ElectricJobStatus> {
+  const resp = await fetch(`${API_BASE}/api/electric/job/${jobId}`);
+  if (!resp.ok) {
+    throw new Error(`Electric job status check failed: ${resp.status}`);
   }
   return await resp.json();
 }

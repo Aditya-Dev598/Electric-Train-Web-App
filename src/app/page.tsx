@@ -13,6 +13,7 @@ import {
   ElectricStatus,
   ElectricRunResult,
   ElectricRunMeta,
+  ElectricJobStatus,
   MergeResult,
   SolarRunResult,
   SolarRunMeta,
@@ -26,6 +27,7 @@ import {
   getElectricStatus,
   uploadElectricFile,
   runElectricPipeline,
+  getElectricJobStatus,
   listElectricRuns,
   mergeResults,
   runSolarPipeline,
@@ -76,6 +78,7 @@ export default function Home() {
   const [electricStatus, setElectricStatus] = useState<ElectricStatus | null>(null);
   const [electricUploading, setElectricUploading] = useState<Record<string, boolean>>({});
   const [electricRunning, setElectricRunning] = useState(false);
+  const [electricProgress, setElectricProgress] = useState<string | null>(null);
   const [electricResult, setElectricResult] = useState<ElectricRunResult | null>(null);
   const [electricError, setElectricError] = useState<string | null>(null);
 
@@ -120,9 +123,16 @@ export default function Home() {
     setCifUploading(true);
     setCifUploadError(null);
     try {
-      const status = await uploadCIF(file);
-      setCifStatus(status);
+      // Returns 202 immediately — file saved, parsing in background
+      await uploadCIF(file);
       setCifFile(null);
+      // Poll until loading=false
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        const s = await getCIFStatus();
+        setCifStatus(s);
+        if (!s.loading) break;
+      }
     } catch (e) {
       setCifUploadError(e instanceof Error ? e.message : 'CIF upload failed');
     } finally {
@@ -207,7 +217,7 @@ export default function Home() {
   };
 
   // ── Electric pipeline ─────────────────────────────────────────────────────
-  const handleElectricUpload = async (fileType: 'rolling_stock' | 'station_points' | 'tss_points' | 'timetable' | 'route', file: File) => {
+  const handleElectricUpload = async (fileType: 'rolling_stock' | 'station_points' | 'timetable' | 'route', file: File) => {
     setElectricUploading(prev => ({ ...prev, [fileType]: true }));
     setElectricError(null);
     try {
@@ -251,16 +261,35 @@ export default function Home() {
       return;
     }
     setElectricRunning(true);
+    setElectricProgress('Starting electric pipeline…');
     setElectricError(null);
     setElectricResult(null);
     try {
-      const res = await runElectricPipeline(Array.from(selectedResultIds));
-      setElectricResult(res);
-      listElectricRuns().then(setElectricRuns).catch(() => {});
+      // Returns 202 + job_id immediately
+      const { job_id } = await runElectricPipeline(Array.from(selectedResultIds));
+      setElectricProgress('Running energy analysis — this may take a minute…');
+      // Poll until done or error
+      while (true) {
+        await new Promise(r => setTimeout(r, 3000));
+        const job: ElectricJobStatus = await getElectricJobStatus(job_id);
+        if (job.status === 'done') {
+          setElectricResult({
+            run_id: job.run_id!,
+            tss_files: job.tss_files!,
+            created_at: job.created_at,
+          });
+          listElectricRuns().then(setElectricRuns).catch(() => {});
+          break;
+        }
+        if (job.status === 'error') {
+          throw new Error(job.error || 'Electric pipeline failed');
+        }
+      }
     } catch (e) {
       setElectricError(e instanceof Error ? e.message : 'Electric pipeline failed');
     } finally {
       setElectricRunning(false);
+      setElectricProgress(null);
     }
   };
 
@@ -294,7 +323,11 @@ export default function Home() {
       <div className="card" style={{ padding: '1rem 1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            {cifStatus?.loaded ? (
+            {cifStatus?.loading ? (
+              <span style={{ color: 'var(--warning, #b45309)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <span className="loading-spinner" /> Parsing CIF file, please wait…
+              </span>
+            ) : cifStatus?.loaded ? (
               <span style={{ color: 'var(--success, #16a34a)', fontWeight: 600 }}>
                 ✓ Server CIF loaded: {cifStatus.filename} — {cifStatus.schedule_count.toLocaleString()} schedules
               </span>
@@ -305,20 +338,20 @@ export default function Home() {
             )}
           </div>
           <label style={{
-            cursor: cifUploading ? 'not-allowed' : 'pointer',
+            cursor: (cifUploading || cifStatus?.loading) ? 'not-allowed' : 'pointer',
             background: 'var(--btn-secondary-bg, #e5e7eb)',
             padding: '0.4rem 0.9rem',
             borderRadius: '0.375rem',
             fontSize: '0.875rem',
             fontWeight: 500,
-            opacity: cifUploading ? 0.6 : 1,
+            opacity: (cifUploading || cifStatus?.loading) ? 0.6 : 1,
           }}>
-            {cifUploading ? 'Uploading…' : cifStatus?.loaded ? 'Replace CIF' : 'Upload CIF to Server'}
+            {cifUploading ? 'Uploading…' : cifStatus?.loading ? 'Parsing…' : cifStatus?.loaded ? 'Replace CIF' : 'Upload CIF to Server'}
             <input
               type="file"
               accept=".CIF,.cif,.MCA,.mca"
               style={{ display: 'none' }}
-              disabled={cifUploading}
+              disabled={cifUploading || !!cifStatus?.loading}
               onChange={e => {
                 const f = e.target.files?.[0];
                 if (f) handleCIFUpload(f);
@@ -694,7 +727,6 @@ export default function Home() {
           {([
             { key: 'rolling_stock', label: 'Rolling Stock CSV' },
             { key: 'station_points', label: 'Station Points CSV' },
-            { key: 'tss_points', label: 'TSS Points CSV (optional)' },
             { key: 'timetable', label: 'Timetable CSV (direct upload)' },
             { key: 'route', label: 'Route CSV (direct upload)' },
           ] as const).map(({ key, label }) => (
@@ -753,6 +785,13 @@ export default function Home() {
                 : 'Run Electric Pipeline (direct upload)'}
           </button>
         </div>
+
+        {electricProgress && (
+          <div className="success-box" style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className="loading-spinner" />
+            {electricProgress}
+          </div>
+        )}
 
         {electricError && <div className="error-box" style={{ marginTop: '0.75rem' }}>{electricError}</div>}
 
