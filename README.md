@@ -131,35 +131,76 @@ cd Electric-Train-Web-App
 The app needs three data files from Network Rail. These are free but require registration.
 
 ### Step 1 — Register for Network Rail Data Feeds
+
 Go to: https://datafeeds.networkrail.co.uk/
-Create a free account and log in.
+Create a free account and log in. You will use this to download the CORPUS and CIF files.
 
 ### Step 2 — Download CORPUS (station data)
-- In Data Feeds, find **CORPUS Extract**
-- Download the JSON file
-- Rename it to `CORPUSExtract.json`
+
+- In Data Feeds, find **CORPUS Extract** (you can search for it)
+- Click **Download** — the file will be called something like `CORPUSExtract.json`
 - Place it in: `backend/data/corpus/CORPUSExtract.json`
+  - If the file has a different name, rename it to exactly `CORPUSExtract.json`
 
 ### Step 3 — Prepare your CIF timetable file
+
 - In Data Feeds, find **Full TTIS data** (timetable)
-- Download the `.MCA` or `.CIF` file
+- Download the `.MCA` or `.CIF` file (it will be a large file, typically 500 MB – 1 GB)
 - You can either:
-  - Place it in `backend/data/cif/` before starting the app (it will load automatically), **or**
-  - Upload it through the app's **CIF Upload** panel after the app is running (recommended)
+  - Place it in `backend/data/cif/` before starting the app (it will load automatically on startup), **or**
+  - Upload it through the app's **Upload CIF to Server** button after the app is running (recommended — a progress bar will show while it loads)
 
-### Step 4 — Download Mileage data
-- Register at: https://raildata.org.uk/ (Rail Data Marketplace)
-- Find the **NESA mileage** dataset
-- Convert or download as JSON in the format shown in `backend/data/sample/`
-- Name it `mileage.json` and place it at: `backend/data/mileage/mileage.json`
+### Step 4 — Download Mileage data from Rail Data Marketplace
 
-### Step 5 — (Optional) Darwin API token for extra detail
-Darwin provides the number of coaches and train class. Without it, those two fields will be blank.
-- Register at: https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/
-- You will receive a token by email
-- You will enter this token in the configuration step below
+The mileage data tells the app the distance in miles between each pair of stations. Without it, the `distance_miles` column in the route CSV will be blank.
 
-> **Note:** The app works fine without a Darwin token — you just won't get coach/class data.
+1. Go to: https://raildata.org.uk/ and create a free account
+2. Search for **NESA** or **mileage** in the dataset catalogue
+3. Download the dataset — it will come as a JSON or CSV file
+4. The app expects a JSON file in this exact format:
+   ```json
+   {
+     "segments": [
+       {
+         "from_tiploc": "WATRLMN",
+         "to_tiploc": "CLPHMJN",
+         "elr": "WAT1",
+         "miles": 3,
+         "chains": 45,
+         "distance_miles": 3.5625
+       }
+     ]
+   }
+   ```
+   - `from_tiploc` / `to_tiploc` — the TIPLOC codes of each station (not CRS codes — TIPLOCs are longer, e.g. `WATRLMN` for Waterloo)
+   - `elr` — the Engineer's Line Reference (the route section identifier)
+   - Either provide `miles` + `chains` (1 mile = 80 chains), or a pre-computed `distance_miles`
+5. Save the file as `mileage.json` and place it at: `backend/data/mileage/mileage.json`
+
+> **Note:** If the Rail Data Marketplace gives you the mileage data in a different format (e.g. CSV or a different JSON structure), you will need to convert it to match the format above. The key fields are `from_tiploc`, `to_tiploc`, and either `miles`+`chains` or `distance_miles`.
+
+### Step 5 — (Optional) Darwin API token for train class and coach count
+
+Darwin is National Rail's live train data system. The app uses it to look up how many coaches each service has and whether it is First+Standard or Standard Only. Without it, the `number_of_coaches` and `train_class` columns will be blank — you can fill them in manually in the editor.
+
+**How to get a Darwin API token:**
+1. Go to: https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/
+2. Fill in the registration form (name, email, intended use)
+3. You will receive an email with your token — it looks like a long string of letters and numbers, e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+
+**How to enter the token in the app:**
+1. Open the file `backend/.env` in a text editor (Notepad on Windows, TextEdit on Mac)
+2. Find the line: `DARWIN_API_TOKEN=your-darwin-token-here`
+3. Replace `your-darwin-token-here` with your actual token, e.g.:
+   ```
+   DARWIN_API_TOKEN=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+   ```
+4. Save the file — no quotes needed around the token
+5. Restart the backend (`Ctrl+C` then run the uvicorn command again) for the change to take effect
+
+> **The API endpoint is already set correctly in `.env.example`** — do not change `DARWIN_API_URL`. Only `DARWIN_API_TOKEN` needs to be filled in.
+
+> **Note:** The app works fine without a Darwin token — you just won't get coach/class data automatically.
 
 ---
 
@@ -178,7 +219,7 @@ cd C:\Users\YourName\Downloads\Electric-Train-Web-App
 ```
 copy backend\.env.example backend\.env
 ```
-Now open the file `backend\.env` in Notepad and fill in your Darwin token if you have one (find the line `DARWIN_API_TOKEN=` and paste your token after the `=`). Save and close.
+Now open the file `backend\.env` in Notepad. If you have a Darwin token, find the line `DARWIN_API_TOKEN=` and paste your token after the `=`. Save and close. (You can leave it as-is and add the token later.)
 
 **2. Create a virtual environment for the backend** (keeps Python packages tidy):
 ```
@@ -232,7 +273,7 @@ cd ~/Downloads/Electric-Train-Web-App
 ```
 cp backend/.env.example backend/.env
 ```
-Open `backend/.env` in TextEdit to add your Darwin token if you have one. Find the line `DARWIN_API_TOKEN=` and paste your token after the `=`. Save the file.
+Open `backend/.env` in TextEdit. If you have a Darwin token, find the line `DARWIN_API_TOKEN=` and paste your token after the `=`. Save the file. (You can leave it blank and add the token later.)
 
 **2. Create a virtual environment for the backend:**
 ```
@@ -283,7 +324,7 @@ cd ~/Downloads/Electric-Train-Web-App
 ```
 cp backend/.env.example backend/.env
 ```
-Open `backend/.env` in a text editor (e.g. `nano backend/.env`) to add your Darwin token if you have one. Find `DARWIN_API_TOKEN=` and paste your token after the `=`. Press `Ctrl+X`, then `Y`, then Enter to save.
+Open `backend/.env` in a text editor (e.g. `nano backend/.env`). If you have a Darwin token, find `DARWIN_API_TOKEN=` and paste your token after the `=`. Press `Ctrl+X`, then `Y`, then Enter to save. (You can leave it blank and add the token later.)
 
 **2. Create a virtual environment for the backend:**
 ```
