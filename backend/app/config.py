@@ -6,6 +6,12 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load backend/.env (relative to this file: backend/app/config.py → backend/.env)
+_ENV_FILE = Path(__file__).parent.parent / ".env"
+load_dotenv(_ENV_FILE)
+
 # Absolute path to the backend/data directory, regardless of CWD
 _DATA_DIR = Path(__file__).parent.parent / "data"
 
