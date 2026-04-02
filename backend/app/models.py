@@ -85,6 +85,10 @@ class CIFSchedule:
     applicable_timetable: str = ""
     locations: list[CIFLocation] = field(default_factory=list)
     bank_holiday_running: str = ""
+    # BS record cols 45-47, 48-51, 60 (0-indexed)
+    power_type: str = ""    # EMU, DMU, HST, D, E, etc.
+    timing_load: str = ""   # unit class code e.g. "321", "387", "444"
+    seating_class: str = "" # B=Business+1st+Std, F=1st+Std, S=Std only
 
     @property
     def origin(self) -> Optional[CIFLocation]:
@@ -144,12 +148,12 @@ class DarwinMatch:
 @dataclass
 class TimetableRow:
     """A single row in the timetable CSV output."""
-    date: str          # YYYY-MM-DD
+    date: str            # YYYY-MM-DD
     departure_time: str  # HH:MM:SS
     route_variant: str   # auto-generated "Origin - Destination" key into route table
-    stop_type: str = "stop"  # "stop" = calls here, "pass" = passes through without stopping
-    train_class: str = ""    # empty string if unavailable
-    number_of_coaches: str = ""  # empty string if unavailable
+    stop_type: str = "stop"          # "stop" = calls here, "pass" = passes through
+    train_class: str = ""            # empty string if unavailable
+    number_of_coaches: Optional[int] = None  # None → blank in CSV
 
 
 @dataclass
@@ -159,10 +163,11 @@ class RouteRow:
     seq: int
     from_station: str
     to_station: str
-    stop_type: str        # "stop" = from_station is a calling point, "pass" = pass-through
-    distance_miles: str   # decimal string or empty
-    run_min: str          # integer string or empty
-    wait_min: str         # integer string
+    stop_type: str               # "stop" = calling point, "pass" = pass-through
+    distance_miles: Optional[float] = None   # None → blank in CSV
+    run_min: Optional[int] = None            # None → blank in CSV
+    wait_min: Optional[int] = None           # None → blank in CSV
+    avg_elevation_m: Optional[float] = None  # average metres above sea level A→B
 
 
 @dataclass
@@ -181,6 +186,10 @@ class DebugRow:
     number_of_coaches: str
     failure_reason: str
     mileage_status: str
+    # CIF BS record fields — present when CIF formation fallback is used
+    power_type: str = ""
+    timing_load: str = ""
+    seating_class: str = ""
 
 
 @dataclass

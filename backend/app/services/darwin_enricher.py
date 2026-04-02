@@ -1,18 +1,20 @@
 """Darwin enricher: fetch train_class and number_of_coaches from Darwin API.
 
 Implements the CIF ↔ Darwin matching strategy using:
-- Train UID (primary key)
-- Origin departure time
+- Headcode / trainid (primary — Darwin departure board exposes this)
+- Origin departure time (±2 min tolerance)
 - Service date
-- Location sequence validation
 
-Data source: National Rail Darwin OpenLDBWS / Push Port.
+Note: Darwin OpenLDBWS departure board does NOT return the CIF train UID.
+It returns `serviceID` (opaque base64 RID) and `trainid` (headcode/RSID).
+Matching is therefore headcode + time, NOT uid + time.
+
+Data source: National Rail Darwin OpenLDBWS.
 Access: https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/
 
-Performance note: Darwin OpenLDBWS is a live API. Results for a (station, date)
-pair are cached in-process so the departure board is fetched at most once per
-station per date — not once per schedule row. Failures (e.g. 401) are also
-cached as empty lists so a bad token doesn't trigger N HTTP calls per run.
+Performance note: results for a (station, date) pair are cached in-process.
+Failures (e.g. 401) are also cached as [] so a bad token doesn't trigger
+N HTTP calls per generation run.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ import logging
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional
-from urllib.parse import urljoin
 
 import requests
 
@@ -37,20 +38,19 @@ NS_LDB = "http://thalesgroup.com/RTTI/2021-11-01/ldb/"
 NS_TYPES = "http://thalesgroup.com/RTTI/2017-10-01/ldb/types"
 NS_CT = "http://thalesgroup.com/RTTI/2019-01-01/ldb/commontypes"
 
-# Darwin is a live API — only attempt enrichment for dates within this window
-_DARWIN_LOOKBACK_DAYS = 0   # Darwin does not serve historical dates
-_DARWIN_LOOKAHEAD_DAYS = 7  # Darwin typically has ~7 days of future schedules
+_DARWIN_LOOKBACK_DAYS = 0
+_DARWIN_LOOKAHEAD_DAYS = 7
 
 
 class DarwinEnricher:
     """Enriches CIF schedules with Darwin formation data (train class, coaches).
 
     Matching Strategy:
-    1. Query Darwin by station CRS + date to get service list (cached per date)
-    2. Match CIF Train UID against Darwin serviceID/trainId
-    3. Validate by comparing origin departure time (±2 min tolerance)
-    4. Extract formation data for coach count and class
-    5. Log all matching decisions with confidence levels
+    1. Query Darwin departure board by station CRS + date (cached per date)
+    2. Match by headcode + departure time (±2 min) → HIGH
+    3. Match by headcode only → MEDIUM
+    4. Match by departure time only (±2 min) → LOW
+    5. Fetch GetServiceDetails for formation data (coaches, length)
     """
 
     def __init__(
@@ -67,9 +67,6 @@ class DarwinEnricher:
         self._max_retries = max_retries
         self._audit = audit or AuditLogger()
         self._enabled = bool(api_token)
-        # Cache: (station_crs, date) → list of service dicts
-        # Avoids making one HTTP request per schedule row for the same date.
-        # Failures (401, timeout, etc.) are stored as [] so they are also cached.
         self._departure_cache: dict[tuple[str, date], list[dict]] = {}
 
         if not self._enabled:
@@ -80,7 +77,6 @@ class DarwinEnricher:
         return self._enabled
 
     def _date_in_darwin_window(self, service_date: date) -> bool:
-        """Return True only if Darwin is likely to have data for this date."""
         today = datetime.now(timezone.utc).date()
         earliest = today - timedelta(days=_DARWIN_LOOKBACK_DAYS)
         latest = today + timedelta(days=_DARWIN_LOOKAHEAD_DAYS)
@@ -92,16 +88,6 @@ class DarwinEnricher:
         service_date: date,
         station_crs: str,
     ) -> DarwinMatch:
-        """Attempt to enrich a single CIF schedule with Darwin data.
-
-        Args:
-            schedule: The CIF schedule to enrich
-            service_date: The specific operating date
-            station_crs: CRS code of the station to query
-
-        Returns:
-            DarwinMatch with results and confidence level
-        """
         match = DarwinMatch(
             cif_uid=schedule.train_uid,
             stp_indicator=schedule.stp_indicator.value,
@@ -124,7 +110,6 @@ class DarwinEnricher:
             )
             return match
 
-        # Darwin is live-only: skip dates outside the window without an HTTP call
         if not self._date_in_darwin_window(service_date):
             match.failure_reason = "date_outside_darwin_window"
             match.matching_method = "skipped"
@@ -132,9 +117,6 @@ class DarwinEnricher:
             return match
 
         try:
-            # Use cached departure board — one HTTP call per (station, date).
-            # On failure, cache an empty list so subsequent schedules for the
-            # same date don't trigger redundant HTTP calls.
             cache_key = (station_crs, service_date)
             if cache_key not in self._departure_cache:
                 try:
@@ -146,8 +128,8 @@ class DarwinEnricher:
                         "Darwin API error for station %s on %s (caching failure): %s",
                         station_crs, service_date, exc,
                     )
-                    self._departure_cache[cache_key] = []  # cache so we don't retry
-                    raise  # propagate to outer handler to set match failure_reason
+                    self._departure_cache[cache_key] = []
+                    raise
 
             services = self._departure_cache[cache_key]
 
@@ -157,16 +139,16 @@ class DarwinEnricher:
                 self._log_match(match)
                 return match
 
-            # Try to find matching service
             best_match = self._find_matching_service(schedule, services)
 
             if best_match:
                 match.darwin_rid = best_match.get("rid", "")
-                match.matching_method = best_match.get("method", "uid_match")
+                match.matching_method = best_match.get("method", "unknown")
                 match.confidence = MatchConfidence(best_match.get("confidence", "FAILED"))
 
-                # Extract formation data if we have a good match
-                if match.confidence in (MatchConfidence.EXACT, MatchConfidence.HIGH):
+                if match.confidence in (
+                    MatchConfidence.EXACT, MatchConfidence.HIGH, MatchConfidence.MEDIUM
+                ):
                     formation = self._get_formation(match.darwin_rid)
                     if formation:
                         match.train_class = formation.get("train_class")
@@ -190,16 +172,7 @@ class DarwinEnricher:
         self._log_match(match)
         return match
 
-    def _query_departures(
-        self,
-        station_crs: str,
-        service_date: date,
-    ) -> list[dict]:
-        """Query Darwin OpenLDBWS for departures at a station.
-
-        Returns a list of service dicts with keys:
-        rid, uid, std (scheduled time of departure), origin, destination
-        """
+    def _query_departures(self, station_crs: str, service_date: date) -> list[dict]:
         soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="{NS_SOAP}"
                xmlns:ldb="{NS_LDB}"
@@ -241,114 +214,104 @@ class DarwinEnricher:
         return []
 
     def _parse_departure_response(self, xml_text: str) -> list[dict]:
-        """Parse Darwin SOAP departure board response into service list."""
         services = []
         try:
             root = ET.fromstring(xml_text)
-
-            # Navigate SOAP envelope to find train services
             for svc in root.iter():
-                if "trainServices" in svc.tag or "service" in svc.tag.lower():
+                tag = svc.tag.split("}")[-1] if "}" in svc.tag else svc.tag
+                if tag == "service":
                     service_data = self._extract_service_from_element(svc)
                     if service_data:
                         services.append(service_data)
-
         except ET.ParseError as exc:
             logger.warning("Failed to parse Darwin XML response: %s", exc)
-
         return services
 
     def _extract_service_from_element(self, elem: ET.Element) -> Optional[dict]:
-        """Extract service info from a Darwin XML service element."""
-        service = {}
-
+        service: dict = {}
         for child in elem:
             tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            text = (child.text or "").strip()
 
-            if tag == "rid":
-                service["rid"] = (child.text or "").strip()
-            elif tag == "uid":
-                service["uid"] = (child.text or "").strip()
+            if tag == "serviceID":
+                service["rid"] = text
             elif tag == "trainid":
-                service["trainid"] = (child.text or "").strip()
+                # Darwin trainid is the headcode / RSID (e.g. "2U23", "SW1234")
+                service["trainid"] = text
+            elif tag == "rsid":
+                service["rsid"] = text
             elif tag in ("std", "scheduledDeparture"):
-                service["std"] = (child.text or "").strip()
+                service["std"] = text
             elif tag in ("etd", "estimatedDeparture"):
-                service["etd"] = (child.text or "").strip()
-            elif tag == "serviceID":
-                service["rid"] = (child.text or "").strip()
+                service["etd"] = text
+            elif tag == "length":
+                try:
+                    service["length"] = int(text)
+                except (ValueError, TypeError):
+                    pass
 
-        if "rid" in service or "uid" in service:
-            return service
-        return None
+        return service if "rid" in service else None
 
     def _find_matching_service(
         self,
         schedule: CIFSchedule,
         darwin_services: list[dict],
     ) -> Optional[dict]:
-        """Find the Darwin service that matches a CIF schedule.
+        """Match a CIF schedule against Darwin departure board services.
 
-        Matching priority:
-        1. Exact UID match + time match → EXACT
-        2. UID match + time within 2 min → HIGH
-        3. UID match only → MEDIUM
-        4. Headcode + time match → LOW
+        Darwin does not expose the CIF train UID. Matching is:
+        1. Headcode + time ±2 min → HIGH
+        2. Headcode only → MEDIUM
+        3. Time ±2 min only → LOW
         """
-        cif_uid = schedule.train_uid.strip().upper()
+        headcode = schedule.train_identity.strip().upper() if schedule.train_identity else ""
         origin = schedule.origin
-        cif_dep_minutes = parse_cif_time(origin.departure_time_str) if origin else None
+        cif_minutes = parse_cif_time(origin.departure_time_str) if origin else None
 
+        def _darwin_minutes(svc: dict) -> Optional[int]:
+            std = svc.get("std", "")
+            if std and ":" in std:
+                parts = std.split(":")
+                try:
+                    return int(parts[0]) * 60 + int(parts[1])
+                except (ValueError, IndexError):
+                    pass
+            return None
+
+        def _headcode_match(svc: dict) -> bool:
+            if not headcode:
+                return False
+            darwin_trainid = (svc.get("trainid") or svc.get("rsid") or "").strip().upper()
+            # Darwin trainid may be a 4-char headcode (e.g. "2U23") or a longer RSID
+            # (e.g. "SW002300"). Try exact match first, then headcode prefix.
+            if darwin_trainid == headcode:
+                return True
+            if len(headcode) == 4 and darwin_trainid.endswith(headcode):
+                return True
+            return False
+
+        # Pass 1: headcode + time → HIGH
         for svc in darwin_services:
-            darwin_uid = (svc.get("uid") or "").strip().upper()
-            darwin_std = svc.get("std", "")
+            dm = _darwin_minutes(svc)
+            if _headcode_match(svc) and cif_minutes is not None and dm is not None:
+                if abs(cif_minutes - dm) <= 2:
+                    return {**svc, "method": "headcode_time", "confidence": "HIGH"}
 
-            # Parse Darwin time (HH:MM format) to minutes
-            darwin_minutes = None
-            if darwin_std and ":" in darwin_std:
-                parts = darwin_std.split(":")
-                if len(parts) >= 2:
-                    try:
-                        darwin_minutes = int(parts[0]) * 60 + int(parts[1])
-                    except ValueError:
-                        pass
+        # Pass 2: headcode only → MEDIUM
+        for svc in darwin_services:
+            if _headcode_match(svc):
+                return {**svc, "method": "headcode_only", "confidence": "MEDIUM"}
 
-            # Strategy 1: UID exact match
-            if darwin_uid == cif_uid:
-                if cif_dep_minutes is not None and darwin_minutes is not None:
-                    time_diff = abs(cif_dep_minutes - darwin_minutes)
-                    if time_diff == 0:
-                        return {**svc, "method": "uid_exact", "confidence": "EXACT"}
-                    elif time_diff <= 2:
-                        return {**svc, "method": "uid_time_tolerance", "confidence": "HIGH"}
-                    else:
-                        return {**svc, "method": "uid_time_mismatch", "confidence": "MEDIUM"}
-                else:
-                    return {**svc, "method": "uid_only", "confidence": "MEDIUM"}
-
-        # Strategy 2: Headcode fallback
-        if schedule.train_identity:
-            headcode = schedule.train_identity.strip().upper()
+        # Pass 3: time only → LOW
+        if cif_minutes is not None:
             for svc in darwin_services:
-                darwin_trainid = (svc.get("trainid") or "").strip().upper()
-                if darwin_trainid == headcode and cif_dep_minutes is not None:
-                    darwin_std = svc.get("std", "")
-                    if darwin_std and ":" in darwin_std:
-                        parts = darwin_std.split(":")
-                        try:
-                            darwin_minutes = int(parts[0]) * 60 + int(parts[1])
-                            if abs(cif_dep_minutes - darwin_minutes) <= 5:
-                                return {**svc, "method": "headcode_fallback", "confidence": "LOW"}
-                        except ValueError:
-                            pass
+                dm = _darwin_minutes(svc)
+                if dm is not None and abs(cif_minutes - dm) <= 2:
+                    return {**svc, "method": "time_only", "confidence": "LOW"}
 
         return None
 
     def _get_formation(self, rid: str) -> Optional[dict]:
-        """Query Darwin for formation/loading data for a specific RID.
-
-        Returns dict with 'train_class' and 'coaches' if available.
-        """
         soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="{NS_SOAP}"
                xmlns:ldb="{NS_LDB}"
@@ -384,41 +347,54 @@ class DarwinEnricher:
             return None
 
     def _parse_formation_response(self, xml_text: str) -> Optional[dict]:
-        """Parse Darwin service detail response for formation data."""
-        result = {"train_class": None, "coaches": None}
+        result: dict = {"train_class": None, "coaches": None}
 
         try:
             root = ET.fromstring(xml_text)
 
-            # Look for formation/loading data
             for elem in root.iter():
                 tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
 
-                if tag == "formation":
-                    coaches = list(elem)
-                    coach_count = sum(
-                        1 for c in coaches
-                        if (c.tag.split("}")[-1] if "}" in c.tag else c.tag) == "coach"
-                    )
-                    if coach_count > 0:
-                        result["coaches"] = coach_count
+                # `length` is the most reliable vehicle count field
+                if tag in ("length", "trainLength") and result["coaches"] is None:
+                    try:
+                        result["coaches"] = int((elem.text or "").strip())
+                    except (ValueError, TypeError):
+                        pass
 
-                    # Extract class from coach attributes
-                    for coach in coaches:
-                        coach_tag = coach.tag.split("}")[-1] if "}" in coach.tag else coach.tag
-                        if coach_tag == "coach":
+                elif tag in ("category", "trainClass") and result["train_class"] is None:
+                    if elem.text and elem.text.strip():
+                        result["train_class"] = elem.text.strip()
+
+                elif tag == "formation":
+                    # Darwin XML structure may be:
+                    #   <formation><coaches><coach .../></coaches></formation>
+                    # or
+                    #   <formation><coach .../><coach .../></formation>
+                    # Handle both.
+                    coach_elements: list[ET.Element] = []
+                    for child in elem:
+                        child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                        if child_tag == "coaches":
+                            # Unwrap the <coaches> container
+                            coach_elements.extend(list(child))
+                        elif child_tag == "coach":
+                            coach_elements.append(child)
+
+                    if coach_elements and result["coaches"] is None:
+                        coach_count = sum(
+                            1 for c in coach_elements
+                            if (c.tag.split("}")[-1] if "}" in c.tag else c.tag) == "coach"
+                        )
+                        if coach_count > 0:
+                            result["coaches"] = coach_count
+
+                    if result["train_class"] is None:
+                        for coach in coach_elements:
                             class_attr = coach.get("classCode") or coach.get("coachClass", "")
                             if class_attr:
                                 result["train_class"] = class_attr
                                 break
-
-                elif tag in ("length", "trainLength"):
-                    if elem.text and elem.text.strip().isdigit():
-                        result["coaches"] = int(elem.text.strip())
-
-                elif tag in ("category", "trainClass"):
-                    if elem.text:
-                        result["train_class"] = elem.text.strip()
 
         except ET.ParseError as exc:
             logger.warning("Failed to parse Darwin formation XML: %s", exc)
@@ -429,7 +405,6 @@ class DarwinEnricher:
         return None
 
     def _log_match(self, match: DarwinMatch) -> None:
-        """Log a Darwin match result."""
         self._audit.log_darwin_match(
             cif_uid=match.cif_uid,
             stp_indicator=match.stp_indicator,

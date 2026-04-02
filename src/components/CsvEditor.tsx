@@ -23,6 +23,7 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
   const [selectedRows, setSelectedRows] = useState<ReadonlySet<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [recalcing, setRecalcing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
@@ -101,6 +102,35 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
     setRows(renumbered);
   };
 
+  const handleRecalcDistances = async () => {
+    setRecalcing(true);
+    setError(null);
+    try {
+      const payload = rows.map(({ _rowId, ...rest }) => rest);
+      const resp = await fetch(
+        `${API_BASE}/api/results/${resultId}/recalculate-distances`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(d.detail || `Recalculate failed: ${resp.status}`);
+      }
+      const { rows: updated } = await resp.json();
+      setRows((updated as Record<string, string>[]).map((r, i) => ({
+        ...r,
+        _rowId: rows[i]?._rowId ?? String(i),
+      })));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Recalculate failed');
+    } finally {
+      setRecalcing(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     setSaveMsg(null);
@@ -162,6 +192,17 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
             onClick={handleRenumberSeq}
           >
             Renumber Seq
+          </button>
+        )}
+        {csvType === 'route' && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem' }}
+            disabled={recalcing}
+            onClick={handleRecalcDistances}
+          >
+            {recalcing ? 'Recalculating…' : 'Recalc Distances'}
           </button>
         )}
         <button

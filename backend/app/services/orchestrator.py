@@ -31,6 +31,7 @@ from backend.app.services.csv_exporter import (
     generate_route_csv,
     generate_timetable_csv,
 )
+from backend.app.services.cif_formation import cif_coach_count, cif_train_class
 from backend.app.services.darwin_enricher import DarwinEnricher
 from backend.app.services.mileage_resolver import MileageResolver
 from backend.app.services.route_builder import (
@@ -215,14 +216,20 @@ class Orchestrator:
                 darwin_match = self._darwin.enrich_schedule(schedule, d, crs)
 
                 train_class = ""
-                coaches = ""
+                coaches: Optional[int] = None
 
-                if darwin_match.confidence in (MatchConfidence.EXACT, MatchConfidence.HIGH):
+                if darwin_match.confidence in (MatchConfidence.EXACT, MatchConfidence.HIGH, MatchConfidence.MEDIUM):
                     darwin_success += 1
                     if darwin_match.train_class:
                         train_class = darwin_match.train_class
                     if darwin_match.number_of_coaches is not None:
-                        coaches = str(darwin_match.number_of_coaches)
+                        coaches = darwin_match.number_of_coaches
+
+                # CIF fallback: if Darwin didn't supply class/coaches, derive from BS record
+                if not train_class:
+                    train_class = cif_train_class(schedule.seating_class)
+                if coaches is None:
+                    coaches = cif_coach_count(schedule.timing_load, schedule.power_type)
 
                 stop_type = get_stop_type_at_station(schedule, tiploc) or "stop"
 
@@ -248,9 +255,12 @@ class Orchestrator:
                     matching_method=darwin_match.matching_method,
                     confidence=darwin_match.confidence.value,
                     train_class=train_class,
-                    number_of_coaches=coaches,
+                    number_of_coaches=str(coaches) if coaches is not None else "",
                     failure_reason=darwin_match.failure_reason or "",
                     mileage_status="",  # Populated during route build
+                    power_type=schedule.power_type,
+                    timing_load=schedule.timing_load,
+                    seating_class=schedule.seating_class,
                 ))
 
         if not departures_found:

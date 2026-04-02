@@ -189,6 +189,14 @@ class CIFParser:
         train_category = _safe_strip(line, 30, 32)
         train_identity = _safe_strip(line, 32, 36)
 
+        # BS extra fields (only present in full-length 80-char records)
+        # Col 45-47: power type (EMU, DMU, HST, D, E …)
+        # Col 48-51: timing load (class code e.g. "321 ", "450 ")
+        # Col 60:    seating class (B=business+1st+std, F=1st+std, S=std only)
+        power_type = _safe_strip(line, 45, 48)
+        timing_load = _safe_strip(line, 48, 52)
+        seating_class = _safe_strip(line, 60, 61)
+
         # STP indicator at col 79
         stp_raw = _safe_strip(line, 79, 80) if len(line) > 79 else "P"
         try:
@@ -213,6 +221,9 @@ class CIFParser:
             train_category=train_category,
             train_identity=train_identity,
             bank_holiday_running=bank_holiday,
+            power_type=power_type,
+            timing_load=timing_load,
+            seating_class=seating_class,
         )
 
     def _parse_bx(self, line: str, schedule: CIFSchedule) -> None:

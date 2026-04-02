@@ -85,6 +85,8 @@ def create_app() -> FastAPI:
         logger.info("Mileage data loaded successfully")
     except Exception as exc:
         logger.warning("Failed to load mileage data: %s", exc)
+    # Wire up TIPLOC→CRS resolver so the coordinate fallback can look up station coords
+    mileage.set_crs_lookup(corpus.tiploc_to_crs)
 
     darwin = DarwinEnricher(
         api_url=settings.darwin_api_url,

@@ -165,29 +165,22 @@ def build_route_rows(
             else "stop"
         )
 
-        # Distance
-        dist, method = mileage.get_distance_with_method(from_tiploc, to_tiploc)
-        if dist is None:
-            audit.log_mileage_resolution(from_station, to_station, None, False, method)
-            distance_str = ""
-        else:
-            audit.log_mileage_resolution(from_station, to_station, dist, True, method)
-            distance_str = f"{dist:.2f}"
+        # Distance + elevation (get_segment_with_elevation uses coord fallback for elev)
+        dist, elev, method = mileage.get_segment_with_elevation(from_tiploc, to_tiploc)
+        audit.log_mileage_resolution(from_station, to_station, dist, dist is not None, method)
 
         # Run time: departure from A to arrival at B
         dep_a = parse_cif_time(from_loc.departure_time_str)
         arr_b = parse_cif_time(to_loc.arrival_time_str)
         run = calculate_run_minutes(dep_a, arr_b)
-        run_str = str(run) if run is not None else ""
 
         # Wait time: 0 for pass-throughs, normal dwell for stops
         if stop_type == "pass":
-            wait_str = "0"
+            wait: Optional[int] = 0
         else:
             arr_a = parse_cif_time(from_loc.arrival_time_str)
             dep_a_full = parse_cif_time(from_loc.departure_time_str)
             wait = calculate_wait_minutes(arr_a, dep_a_full)
-            wait_str = str(wait)
 
         rows.append(RouteRow(
             route_variant=route_variant,
@@ -195,9 +188,10 @@ def build_route_rows(
             from_station=from_station,
             to_station=to_station,
             stop_type=stop_type,
-            distance_miles=distance_str,
-            run_min=run_str,
-            wait_min=wait_str,
+            distance_miles=round(dist, 2) if dist is not None else None,
+            avg_elevation_m=elev,
+            run_min=run,
+            wait_min=wait,
         ))
 
     return rows
