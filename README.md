@@ -150,14 +150,22 @@ Create a free account and log in. You will use this to download the CORPUS and C
   - Place it in `backend/data/cif/` before starting the app (it will load automatically on startup), **or**
   - Upload it through the app's **Upload CIF to Server** button after the app is running (recommended — a progress bar will show while it loads)
 
-### Step 4 — Download Mileage data from Rail Data Marketplace
+### Step 4 — Mileage data (optional — app auto-estimates if not provided)
 
-The mileage data tells the app the distance in miles between each pair of stations. Without it, the `distance_miles` column in the route CSV will be blank.
+The mileage data tells the app the distance in miles between each pair of stations.
+
+**Without any action on your part**, the app will automatically estimate distances using free OpenStreetMap station coordinates (no registration, no download). The first time a generation runs without `mileage.json`, the backend:
+1. Downloads UK rail station coordinates from OpenStreetMap (one-time, ~500 KB)
+2. Downloads station elevations from OpenTopoData SRTM 30m (one-time)
+3. Caches both to `backend/data/mileage/.coord_cache.json` — subsequent runs are instant
+
+Estimated distances are accurate to within ~5–10% (straight-line × 1.15 rail factor). The route CSV will also include an `avg_elevation_m` column (average metres above sea level between each station pair) automatically.
+
+**For official distances** (required for legal/regulatory use), get the NESA dataset from Rail Data Marketplace:
 
 1. Go to: https://raildata.org.uk/ and create a free account
 2. Search for **NESA** or **mileage** in the dataset catalogue
-3. Download the dataset — it will come as a JSON or CSV file
-4. The app expects a JSON file in this exact format:
+3. Download the dataset and convert it to this JSON format:
    ```json
    {
      "segments": [
@@ -166,41 +174,40 @@ The mileage data tells the app the distance in miles between each pair of statio
          "to_tiploc": "CLPHMJN",
          "elr": "WAT1",
          "miles": 3,
-         "chains": 45,
-         "distance_miles": 3.5625
+         "chains": 45
        }
      ]
    }
    ```
-   - `from_tiploc` / `to_tiploc` — the TIPLOC codes of each station (not CRS codes — TIPLOCs are longer, e.g. `WATRLMN` for Waterloo)
-   - `elr` — the Engineer's Line Reference (the route section identifier)
-   - Either provide `miles` + `chains` (1 mile = 80 chains), or a pre-computed `distance_miles`
-5. Save the file as `mileage.json` and place it at: `backend/data/mileage/mileage.json`
+   - `from_tiploc` / `to_tiploc` — TIPLOC codes (e.g. `WATRLMN` for Waterloo)
+   - `elr` — Engineer's Line Reference
+   - Either `miles` + `chains` (1 mile = 80 chains), or a pre-computed `distance_miles` float
+4. Save as `backend/data/mileage/mileage.json`
 
-> **Note:** If the Rail Data Marketplace gives you the mileage data in a different format (e.g. CSV or a different JSON structure), you will need to convert it to match the format above. The key fields are `from_tiploc`, `to_tiploc`, and either `miles`+`chains` or `distance_miles`.
+When `mileage.json` is present, official distances are used and the coordinate estimate is only used as a fallback for any pairs not found in the file.
 
-### Step 5 — (Optional) Darwin API token for train class and coach count
+### Step 5 — (Optional) Darwin API token for better train class and coach data
 
-Darwin is National Rail's live train data system. The app uses it to look up how many coaches each service has and whether it is First+Standard or Standard Only. Without it, the `number_of_coaches` and `train_class` columns will be blank — you can fill them in manually in the editor.
+The app fills in `train_class` and `number_of_coaches` automatically using two sources:
 
-**How to get a Darwin API token:**
+**Source 1 — CIF data (always active, no setup needed)**
+Train class (Standard / 1st & Standard) and approximate coach count are read directly from the Network Rail CIF file you already uploaded. This works for all services with no extra configuration.
+
+**Source 2 — Darwin live API (optional, more accurate for today/near-future dates)**
+Darwin is National Rail's live train system. It provides real-time formation data and is more accurate than CIF for services running in the next 7 days. Darwin only covers live/upcoming dates — it cannot enrich historical data.
+
+To enable Darwin:
 1. Go to: https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/
-2. Fill in the registration form (name, email, intended use)
-3. You will receive an email with your token — it looks like a long string of letters and numbers, e.g. `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
-
-**How to enter the token in the app:**
-1. Open the file `backend/.env` in a text editor (Notepad on Windows, TextEdit on Mac)
-2. Find the line: `DARWIN_API_TOKEN=your-darwin-token-here`
-3. Replace `your-darwin-token-here` with your actual token, e.g.:
+2. Fill in the registration form — you will receive a token like `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
+3. Open `backend/.env` in a text editor, find `DARWIN_API_TOKEN=` and paste your token after the `=`:
    ```
    DARWIN_API_TOKEN=a1b2c3d4-e5f6-7890-abcd-ef1234567890
    ```
-4. Save the file — no quotes needed around the token
-5. Restart the backend (`Ctrl+C` then run the uvicorn command again) for the change to take effect
+4. Save the file and restart the backend (`Ctrl+C`, then re-run the uvicorn command)
 
-> **The API endpoint is already set correctly in `.env.example`** — do not change `DARWIN_API_URL`. Only `DARWIN_API_TOKEN` needs to be filled in.
+> **Do not change `DARWIN_API_URL`** — it is already set correctly in `.env.example`.
 
-> **Note:** The app works fine without a Darwin token — you just won't get coach/class data automatically.
+> The app works fine without Darwin — CIF-based class and coach data will still be populated automatically.
 
 ---
 
@@ -428,7 +435,8 @@ After generating, an **Excel-like editor** appears below the results for both th
 - Click **Save Changes** to write your edits back to the server (the downloaded CSV will reflect your changes)
 
 **Route editor only:**
-- Click **Renumber Seq** after deleting stops to close any gaps in the `seq` column — it renumbers each route variant independently starting from 1, so two different route variants never interfere with each other
+- Click **Renumber Seq** after deleting stops to close any gaps in the `seq` column — it renumbers each route variant independently starting from 1
+- Click **Recalc Distances** to re-estimate `distance_miles` and `avg_elevation_m` for all remaining rows after edits or deletions — uses the coordinate fallback (OSM + OpenTopoData)
 
 > This is particularly useful for filling in the `train_type` and `cars` columns, and for shortening routes by deleting unwanted stops before running the Electric Pipeline (see Step 5).
 
@@ -536,12 +544,15 @@ The Solar Pipeline models how much of the electric demand from Step 5 could be m
 |--------|---------|
 | `route_variant` | Identifies which stopping pattern this row belongs to |
 | `seq` | Stop number along the route (1 = first stop, 2 = second, etc.) |
-| `from_station` | 3-letter code of the station the train departs from |
-| `to_station` | 3-letter code of the next station |
+| `from_station` | Name of the station the train departs from |
+| `to_station` | Name of the next station |
 | `stop_type` | `stop` or `pass` for the `from_station` |
-| `distance_miles` | Rail distance between those two stations (blank if data unavailable) |
+| `distance_miles` | Rail distance in miles between those two stations (official if mileage.json present, coordinate estimate otherwise) |
+| `avg_elevation_m` | Average elevation in metres above sea level between the two stations (from OpenTopoData) |
 | `run_min` | Minutes the train takes to travel between those two stations |
 | `wait_min` | Minutes the train waits at `from_station` before departing |
+
+> All numeric columns (`seq`, `distance_miles`, `avg_elevation_m`, `run_min`, `wait_min`) are written as plain numbers — not quoted strings — so they sort and calculate correctly in Excel and Google Sheets.
 
 ### Electric TSS CSV (per substation)
 
@@ -587,8 +598,9 @@ When you are finished, go back to each terminal/command prompt window and press 
 - Try http://127.0.0.1:3000 instead
 
 **`train_class` and `number_of_coaches` are always blank**
-- This is normal if you haven't set a Darwin API token in `backend/.env`
-- Register at https://realtime.nationalrail.co.uk/OpenLDBWSRegistration/ to get a free token
+- These are populated automatically from the CIF file (no setup needed) for most services
+- If they are still blank, download the debug CSV from Results History and check the `timing_load` and `seating_class` columns — if those are also blank, the CIF file may not have formation data for this operator
+- For live/near-future dates, a Darwin API token (see Step 5 of Get Your Data Files) provides more accurate data
 
 **Electric Pipeline returns no TSS files**
 - Make sure Rolling Stock and Station Points CSVs are uploaded (green ticks in the Electric panel)
@@ -607,10 +619,12 @@ All data used by this app comes exclusively from official Network Rail sources:
 
 | Source | What it provides | Where to get it |
 |--------|-----------------|-----------------|
-| **Network Rail CIF** | Train schedules, times, calling points | https://datafeeds.networkrail.co.uk/ |
+| **Network Rail CIF** | Train schedules, times, calling points, class & coach data | https://datafeeds.networkrail.co.uk/ |
 | **Network Rail CORPUS** | Station names, CRS codes, TIPLOC codes | https://datafeeds.networkrail.co.uk/ |
-| **Network Rail NESA** | Official rail distances in miles | https://raildata.org.uk/ |
-| **Darwin OpenLDBWS** | Train class and coach numbers | https://realtime.nationalrail.co.uk/ |
+| **Network Rail NESA** | Official rail distances in miles (optional) | https://raildata.org.uk/ |
+| **OpenStreetMap / Overpass** | Station coordinates for distance estimation (auto, free) | https://overpass-api.de/ |
+| **OpenTopoData SRTM 30m** | Station elevations for avg_elevation_m column (auto, free) | https://api.opentopodata.org/ |
+| **Darwin OpenLDBWS** | Live train class and coach numbers (optional) | https://realtime.nationalrail.co.uk/ |
 | **EU PVGIS** | Solar irradiance data (Solar pipeline only) | https://re.jrc.ec.europa.eu/pvg_tools/en/ |
 
 ---
@@ -633,8 +647,9 @@ Electric-Train-Web-App/
 │   │   │   ├── orchestrator.py        # Main timetable generation logic
 │   │   │   ├── cif_parser.py          # Network Rail CIF file parser
 │   │   │   ├── corpus_mapper.py       # CORPUS station data mapper
-│   │   │   ├── mileage_resolver.py    # NESA mileage lookup
-│   │   │   ├── darwin_enricher.py     # Darwin API enrichment
+│   │   │   ├── mileage_resolver.py    # NESA mileage lookup + OSM coordinate fallback + elevation
+│   │   │   ├── cif_formation.py       # CIF BS record → train_class and coach count lookup
+│   │   │   ├── darwin_enricher.py     # Darwin API enrichment (headcode+time matching)
 │   │   │   ├── result_store.py        # Persistent result storage (Phase 2)
 │   │   │   ├── electric_pipeline.py   # Half-hourly TSS energy model (Phase 4)
 │   │   │   └── solar_pipeline.py      # Solar supply vs. demand model (Phase 5)
