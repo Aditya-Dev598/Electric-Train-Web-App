@@ -417,9 +417,13 @@ async def recalculate_distances(
 ) -> JSONResponse:
     """Re-estimate distance_miles and avg_elevation_m for each route row.
 
-    Uses the coordinate fallback (OSM + OpenTopoData) keyed by CRS codes
-    resolved from the from_station / to_station display names via CORPUS.
-    Rows where the station cannot be resolved are returned unchanged.
+    Resolution order (same as initial generation):
+    1. Official mileage.json data (if loaded) keyed by TIPLOC pair
+    2. Coordinate estimate (OSM Overpass + OpenTopoData) keyed by CRS codes
+
+    Station display names are resolved → TIPLOC via CORPUS, then CRS for
+    the coordinate fallback. Rows where stations cannot be resolved are
+    returned unchanged.
     """
     state = request.app.state
     corpus = state.corpus
@@ -430,24 +434,18 @@ async def recalculate_distances(
         from_name = str(row.get("from_station", ""))
         to_name = str(row.get("to_station", ""))
 
-        crs_from: Optional[str] = None
-        crs_to: Optional[str] = None
-
         from_matches = corpus.resolve_station(from_name)
-        if from_matches:
-            crs_from = from_matches[0].crs_code or None
-
         to_matches = corpus.resolve_station(to_name)
-        if to_matches:
-            crs_to = to_matches[0].crs_code or None
 
         new_row = dict(row)
-        if crs_from and crs_to:
-            segment = mileage.estimate_by_crs(crs_from, crs_to)
-            dist = segment.get("distance_miles")
-            elev = segment.get("avg_elevation_m")
+        if from_matches and to_matches:
+            from_tiploc = from_matches[0].tiploc
+            to_tiploc = to_matches[0].tiploc
+
+            # Use full resolution chain: mileage.json → coordinate estimate
+            dist, elev, _ = mileage.get_segment_with_elevation(from_tiploc, to_tiploc)
             new_row["distance_miles"] = round(dist, 2) if dist is not None else ""
-            new_row["avg_elevation_m"] = elev if elev is not None else ""
+            new_row["avg_elevation_m"] = round(elev, 1) if elev is not None else ""
         updated.append(new_row)
 
     return JSONResponse(content={"rows": updated})

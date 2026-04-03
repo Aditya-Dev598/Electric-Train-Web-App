@@ -26,6 +26,7 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
   const [recalcing, setRecalcing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [recalcMsg, setRecalcMsg] = useState<string | null>(null);
 
   const rowKey = useCallback((row: Row) => row._rowId, []);
 
@@ -105,6 +106,7 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
   const handleRecalcDistances = async () => {
     setRecalcing(true);
     setError(null);
+    setRecalcMsg(null);
     try {
       const payload = rows.map(({ _rowId, ...rest }) => rest);
       const resp = await fetch(
@@ -120,10 +122,20 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
         throw new Error(d.detail || `Recalculate failed: ${resp.status}`);
       }
       const { rows: updated } = await resp.json();
+      // Count how many rows got distance and/or elevation filled in
+      const filled = (updated as Record<string, string>[]).filter(
+        r => r.distance_miles !== '' || r.avg_elevation_m !== ''
+      ).length;
       setRows((updated as Record<string, string>[]).map((r, i) => ({
         ...r,
         _rowId: rows[i]?._rowId ?? String(i),
       })));
+      setRecalcMsg(
+        filled > 0
+          ? `Updated ${filled} row${filled !== 1 ? 's' : ''} — click Save Changes to persist`
+          : 'No distance/elevation data available (coordinate cache not yet loaded)',
+      );
+      setTimeout(() => setRecalcMsg(null), 6000);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Recalculate failed');
     } finally {
@@ -202,7 +214,7 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
             disabled={recalcing}
             onClick={handleRecalcDistances}
           >
-            {recalcing ? 'Recalculating…' : 'Recalc Distances'}
+            {recalcing ? 'Recalculating…' : 'Recalc Distances & Elevation'}
           </button>
         )}
         <button
@@ -215,6 +227,7 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
         {saveMsg && <span style={{ color: 'var(--success, #16a34a)', fontSize: '0.85rem' }}>{saveMsg}</span>}
+        {recalcMsg && <span style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.82rem' }}>{recalcMsg}</span>}
       </div>
 
       {/* Grid */}
