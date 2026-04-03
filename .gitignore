@@ -11,3 +11,5 @@ __pycache__/
 output/
 *.egg-info/
 .pytest_cache/
+# Runtime generation results (contain user data, not source code)
+backend/data/results/*/
