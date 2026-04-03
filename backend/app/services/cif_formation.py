@@ -3,13 +3,13 @@
 Used as a fallback when Darwin enrichment is disabled or fails. Data comes
 entirely from the CIF BS record (already parsed), so no external API is needed.
 
-Train class comes from the seating_class field (BS col 60):
+Train class comes from the seating_class field (BS col 62):
   B = Business + First + Standard  → "1st & Standard"
   F = First + Standard             → "1st & Standard"
   S = Standard only                → "Standard"
   blank                            → "" (unknown)
 
-Coach count comes from the timing_load field (BS cols 48-51), which is a
+Coach count comes from the timing_load field (BS cols 49-52), which is a
 ~3-4 char code identifying the specific rolling-stock class (e.g. "321",
 "700 ", "387 "). A lookup table covers the most common UK EMU/DMU classes.
 Returns None for unknown types so the column stays blank rather than wrong.

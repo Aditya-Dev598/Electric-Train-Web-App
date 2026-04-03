@@ -81,9 +81,13 @@ class _CoordinateFallback:
         # CRS (upper) → (lat, lon, elev_m or None)
         self._coords: dict[str, tuple[float, float, Optional[float]]] = {}
         self._loaded = False
+        self._fetch_attempted = False  # prevent retrying after a failed network fetch
 
     def load(self) -> None:
         """Load from local cache, or fetch from Overpass + OpenTopoData and save."""
+        if self._fetch_attempted:
+            return  # don't retry a failed network fetch on every segment
+
         if self._cache_path.exists():
             try:
                 raw = json.loads(self._cache_path.read_text(encoding="utf-8"))
@@ -100,6 +104,7 @@ class _CoordinateFallback:
             except Exception as exc:
                 logger.warning("Could not read coordinate cache: %s — re-fetching", exc)
 
+        self._fetch_attempted = True
         self._fetch_and_cache()
 
     def _fetch_and_cache(self) -> None:

@@ -280,7 +280,7 @@ async def generate_csv(
     job_id = str(uuid.uuid4())
     _jobs[job_id] = {"status": "processing"}
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.run_in_executor(
         _executor,
         _run_generation,

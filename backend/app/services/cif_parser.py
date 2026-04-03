@@ -189,13 +189,20 @@ class CIFParser:
         train_category = _safe_strip(line, 30, 32)
         train_identity = _safe_strip(line, 32, 36)
 
-        # BS extra fields (only present in full-length 80-char records)
-        # Col 45-47: power type (EMU, DMU, HST, D, E …)
-        # Col 48-51: timing load (class code e.g. "321 ", "450 ")
-        # Col 60:    seating class (B=business+1st+std, F=1st+std, S=std only)
-        power_type = _safe_strip(line, 45, 48)
-        timing_load = _safe_strip(line, 48, 52)
-        seating_class = _safe_strip(line, 60, 61)
+        # BS extra fields (only present in full-length 80-char records).
+        # Layout per Network Rail CIF spec (0-indexed byte positions):
+        #   Col 36:    course indicator (1)
+        #   Col 37-44: train service code (8)
+        #   Col 45:    portion ID (1)          ← NOT power type
+        #   Col 46-48: power type (3)          e.g. "EMU", "DMU", "HST"
+        #   Col 49-52: timing load (4)         e.g. "450 ", "387 ", "700 "
+        #   Col 53-55: operating speed (3)
+        #   Col 56-61: operating characteristics (6)
+        #   Col 62:    train class / seating (1)  "B"/"F"/"S"
+        #   Col 79:    STP indicator
+        power_type = _safe_strip(line, 46, 49)
+        timing_load = _safe_strip(line, 49, 53)
+        seating_class = _safe_strip(line, 62, 63)
 
         # STP indicator at col 79
         stp_raw = _safe_strip(line, 79, 80) if len(line) > 79 else "P"

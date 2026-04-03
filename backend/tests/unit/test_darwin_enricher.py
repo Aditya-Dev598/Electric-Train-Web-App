@@ -41,48 +41,65 @@ class TestDarwinEnricherDisabled:
 
 
 class TestDarwinMatchingLogic:
-    def test_uid_exact_match(self):
+    def test_headcode_and_time_match(self):
+        """Headcode + departure time ±2 min → HIGH confidence."""
         enricher = DarwinEnricher(
             api_url="http://example.com",
             api_token="test-token",
             audit=AuditLogger(),
         )
-        # Mock the matching logic
         services = [
-            {"uid": "A12345", "rid": "202603151234", "std": "08:30", "trainid": "1A23"},
+            {"rid": "202603151234", "std": "08:30", "trainid": "1A23"},
         ]
         schedule = _make_schedule(uid="A12345", dep="0830")
         result = enricher._find_matching_service(schedule, services)
         assert result is not None
-        assert result["confidence"] == "EXACT"
-        assert result["method"] == "uid_exact"
+        assert result["confidence"] == "HIGH"
+        assert result["method"] == "headcode_time"
 
-    def test_uid_time_tolerance(self):
+    def test_headcode_time_within_tolerance(self):
+        """Headcode + time within ±2 minutes → HIGH confidence."""
         enricher = DarwinEnricher(
             api_url="http://example.com",
             api_token="test-token",
         )
         services = [
-            {"uid": "A12345", "rid": "202603151234", "std": "08:31"},
+            {"rid": "202603151234", "std": "08:31", "trainid": "1A23"},
         ]
         schedule = _make_schedule(uid="A12345", dep="0830")
         result = enricher._find_matching_service(schedule, services)
         assert result is not None
         assert result["confidence"] == "HIGH"
 
-    def test_uid_mismatch_falls_to_headcode(self):
+    def test_headcode_only_match(self):
+        """Headcode matches but time doesn't → MEDIUM confidence."""
         enricher = DarwinEnricher(
             api_url="http://example.com",
             api_token="test-token",
         )
         services = [
-            {"uid": "XXXXXX", "rid": "202603151234", "std": "08:30", "trainid": "1A23"},
+            {"rid": "202603151234", "std": "12:00", "trainid": "1A23"},
+        ]
+        schedule = _make_schedule(uid="A12345", dep="0830")
+        result = enricher._find_matching_service(schedule, services)
+        assert result is not None
+        assert result["confidence"] == "MEDIUM"
+        assert result["method"] == "headcode_only"
+
+    def test_time_only_match(self):
+        """Time matches but headcode doesn't → LOW confidence."""
+        enricher = DarwinEnricher(
+            api_url="http://example.com",
+            api_token="test-token",
+        )
+        services = [
+            {"rid": "202603151234", "std": "08:30", "trainid": "9Z99"},
         ]
         schedule = _make_schedule(uid="A12345", dep="0830")
         result = enricher._find_matching_service(schedule, services)
         assert result is not None
         assert result["confidence"] == "LOW"
-        assert result["method"] == "headcode_fallback"
+        assert result["method"] == "time_only"
 
     def test_no_match(self):
         enricher = DarwinEnricher(
