@@ -77,6 +77,13 @@ class CorpusMapper:
                     self._by_name[key] = []
                 self._by_name[key].append(mapping)
 
+                # Also index under apostrophe-normalised name for fuzzy lookup
+                norm = key.replace("'", "").replace("`", "")
+                if norm != key:
+                    if norm not in self._by_name:
+                        self._by_name[norm] = []
+                    self._by_name[norm].append(mapping)
+
         self._loaded = True
         logger.info("CORPUS loaded: %d TIPLOCs, %d CRS codes, %d named stations",
                      len(self._by_tiploc), len(self._by_crs), len(self._by_name))
@@ -98,9 +105,18 @@ class CorpusMapper:
     def resolve_station(self, query: str) -> Optional[list[StationMapping]]:
         """Resolve a station query to StationMapping(s).
 
-        Tries exact match in order: CRS code, TIPLOC, station name.
+        Resolution order:
+        1. CRS code exact match (e.g. "WAT", "VIC")
+        2. TIPLOC exact match
+        3. Station name exact match
+        4. Name + " LONDON" suffix (e.g. "Waterloo" → "WATERLOO LONDON")
+        5. Apostrophe-normalised name + " LONDON" (e.g. "Kings Cross")
+        6. Starts-with partial match on passenger stations (has CRS, not LT/Z-code),
+           sorted by name length (shortest = best match); handles "Clapham Junction"
+           matching "CLAPHAM JUNCTION LONDON" etc.
+
         Returns None if no match found. Returns list for name matches
-        (may be ambiguous).
+        (first entry is best match; multiple entries indicate ambiguity).
         """
         if not self._loaded:
             logger.error("CORPUS not loaded, cannot resolve station")
@@ -110,17 +126,43 @@ class CorpusMapper:
         if not q:
             return None
 
-        # 1. Try CRS exact match (3 letters)
+        # 1. CRS exact match (3 letters)
         if len(q) == 3 and q in self._by_crs:
             return [self._by_crs[q]]
 
-        # 2. Try TIPLOC exact match
+        # 2. TIPLOC exact match
         if q in self._by_tiploc:
             return [self._by_tiploc[q]]
 
-        # 3. Try station name exact match
+        # 3. Station name exact match
         if q in self._by_name:
             return self._by_name[q]
+
+        # Normalise apostrophes for steps 4-6
+        q_norm = q.replace("'", "").replace("`", "")
+
+        # 4. Try adding " LONDON" — covers the many "WATERLOO LONDON", "VICTORIA LONDON" etc.
+        q_london = q_norm + " LONDON"
+        if q_london in self._by_name:
+            matches = [m for m in self._by_name[q_london] if m.crs_code]
+            if matches:
+                return matches
+
+        # 5. Starts-with partial match (passenger stations only, not LT/Underground Z-codes)
+        candidates: list[tuple[int, StationMapping]] = []
+        seen_crs: set[str] = set()
+        for name, mappings in self._by_name.items():
+            name_norm = name.replace("'", "").replace("`", "")
+            if name_norm.startswith(q_norm):
+                for m in mappings:
+                    if m.crs_code and not m.crs_code.startswith("Z") and m.crs_code not in seen_crs:
+                        candidates.append((len(name), m))
+                        seen_crs.add(m.crs_code)
+
+        if candidates:
+            # Shortest name = most specific match (e.g. "WOKING" before "WOKING JUNCTION")
+            candidates.sort(key=lambda x: x[0])
+            return [m for _, m in candidates]
 
         return None
 
