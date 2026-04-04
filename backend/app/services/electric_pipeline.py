@@ -165,7 +165,7 @@ def _expand_services(
     split_cross_tss: float = 0.5,
 ) -> pd.DataFrame:
     st = stations.copy()
-    st["Station_norm"] = st["Station"].astype(str).str.strip()
+    st["Station_norm"] = st["Station"].astype(str).str.strip().str.upper()
     tss_map = dict(zip(st["Station_norm"], st["TSS"].astype(str).str.strip()))
 
     ep = energy_params.set_index("train_type")
@@ -202,8 +202,8 @@ def _expand_services(
         cur_dt = start_dt
 
         for _, seg in segs.iterrows():
-            from_st = str(seg["from_station"]).strip()
-            to_st = str(seg["to_station"]).strip()
+            from_st = str(seg["from_station"]).strip().upper()
+            to_st = str(seg["to_station"]).strip().upper()
             dist_km = float(seg["distance"]) * 1.609344
             run_min = float(seg["run_min"])
             # Bug 1 fix: use wait_min instead of dwell_time
