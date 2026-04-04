@@ -448,7 +448,7 @@ export default function Home() {
                 required
                 maxLength={100}
               />
-              <span className="hint">CRS code (3 letters), TIPLOC, or station name</span>
+              <span className="hint">CRS code (e.g. WAT), TIPLOC, or any station name (e.g. "London Waterloo", "Waterloo", "Clapham Junction")</span>
               {getFieldError('station_name') && (
                 <span className="error-text">{getFieldError('station_name')}</span>
               )}
@@ -526,7 +526,17 @@ export default function Home() {
         {validation && (
           <div style={{ marginTop: '1rem' }}>
             {validation.valid ? (
-              <div className="success-box">All inputs are valid.</div>
+              <div className="success-box">
+                All inputs are valid.
+                {validation.station && (
+                  <span style={{ marginLeft: '0.75rem', fontWeight: 400 }}>
+                    Station resolved: <strong>{validation.station.resolved_name}</strong>
+                    {validation.station.crs && <> &nbsp;(CRS: <code>{validation.station.crs}</code>)</>}
+                    {' '}— TIPLOC: <code>{validation.station.tiploc}</code>
+                    {validation.station.ambiguous && <span style={{ color: 'var(--warning, #b45309)' }}> ⚠ multiple matches — using first</span>}
+                  </span>
+                )}
+              </div>
             ) : (
               <div className="error-box">
                 Validation errors:

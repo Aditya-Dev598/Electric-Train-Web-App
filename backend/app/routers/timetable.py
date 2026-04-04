@@ -199,8 +199,12 @@ def _get_csv(gen_id: str, csv_type: str, state) -> str:
 # ---------------------------------------------------------------------------
 
 @router.post("/validate")
-async def validate_inputs(req: ValidateRequest) -> JSONResponse:
-    """Validate all user inputs before generation."""
+async def validate_inputs(req: ValidateRequest, request: Request) -> JSONResponse:
+    """Validate all user inputs before generation.
+
+    Also resolves the station via CORPUS and returns what was found, so the
+    UI can confirm the station was understood before the user clicks Generate.
+    """
     errors = []
 
     try:
@@ -222,7 +226,37 @@ async def validate_inputs(req: ValidateRequest) -> JSONResponse:
 
     if errors:
         return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
-    return JSONResponse(content={"valid": True, "errors": []})
+
+    # Resolve station via CORPUS and include result in the response so the UI
+    # can show "Resolved to: WATERLOO LONDON (WAT)" before the user generates.
+    corpus = request.app.state.corpus
+    station_info: Optional[dict] = None
+    if corpus.is_loaded:
+        try:
+            cleaned = validate_station_name(req.station_name)
+            matches = corpus.resolve_station(cleaned)
+            if matches:
+                m = matches[0]
+                station_info = {
+                    "resolved_name": m.station_name,
+                    "crs": m.crs_code or "",
+                    "tiploc": m.tiploc,
+                    "ambiguous": len(matches) > 1,
+                }
+            else:
+                errors.append({
+                    "field": "station_name",
+                    "message": (
+                        f"Station '{req.station_name}' not found in CORPUS. "
+                        "Try the CRS code (e.g. WAT), TIPLOC, or a different spelling."
+                    ),
+                })
+        except ValidationError:
+            pass
+
+    if errors:
+        return JSONResponse(status_code=422, content={"valid": False, "errors": errors})
+    return JSONResponse(content={"valid": True, "errors": [], "station": station_info})
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ export interface ValidationError {
 export interface ValidationResult {
   valid: boolean;
   errors: ValidationError[];
+  station?: { resolved_name: string; crs: string; tiploc: string; ambiguous: boolean };
 }
 
 export interface TimetablePreview {
