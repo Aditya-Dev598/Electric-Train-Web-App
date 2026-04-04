@@ -444,8 +444,11 @@ async def recalculate_distances(
 
             # Use full resolution chain: mileage.json → coordinate estimate
             dist, elev, _ = mileage.get_segment_with_elevation(from_tiploc, to_tiploc)
-            new_row["distance_miles"] = round(dist, 2) if dist is not None else ""
-            new_row["avg_elevation_m"] = round(elev, 1) if elev is not None else ""
+            # Only overwrite when we actually got a value — don't wipe existing data
+            if dist is not None:
+                new_row["distance_miles"] = round(dist, 2)
+            if elev is not None:
+                new_row["avg_elevation_m"] = round(elev, 1)
         updated.append(new_row)
 
     return JSONResponse(content={"rows": updated})

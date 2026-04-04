@@ -289,12 +289,13 @@ class Orchestrator:
         if darwin_attempts > 0 and darwin_success == 0 and self._darwin.is_enabled:
             result.warnings.append(
                 "Darwin enrichment failed for all services. "
-                "train_class and number_of_coaches will be empty."
+                "train_class and number_of_coaches are derived from CIF BS records as fallback."
             )
         elif not self._darwin.is_enabled:
             result.warnings.append(
-                "Darwin API token not configured. "
-                "train_class and number_of_coaches fields will be empty."
+                "Darwin API token not configured — "
+                "train_class and number_of_coaches are derived from CIF BS records (seating_class / timing_load). "
+                "Values will be blank only if those fields are absent in the CIF data."
             )
 
         # --- Summary ---

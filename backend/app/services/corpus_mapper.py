@@ -138,8 +138,17 @@ class CorpusMapper:
         if q in self._by_name:
             return self._by_name[q]
 
-        # Normalise apostrophes for steps 4-6
+        # Normalise apostrophes for steps 3.5-6
         q_norm = q.replace("'", "").replace("`", "")
+
+        # 3.5. "LONDON X" → try "X LONDON" (handles "London Waterloo" → "WATERLOO LONDON",
+        #      "London Victoria" → "VICTORIA LONDON", "London Kings Cross" → "KINGS CROSS LONDON")
+        if q_norm.startswith("LONDON "):
+            q_swapped = q_norm[7:].strip() + " LONDON"
+            if q_swapped in self._by_name:
+                matches = [m for m in self._by_name[q_swapped] if m.crs_code]
+                if matches:
+                    return matches
 
         # 4. Try adding " LONDON" — covers the many "WATERLOO LONDON", "VICTORIA LONDON" etc.
         q_london = q_norm + " LONDON"

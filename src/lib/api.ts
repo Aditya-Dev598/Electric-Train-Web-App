@@ -242,12 +242,14 @@ export interface ElectricRunResult {
   run_id: string;
   tss_files: string[];
   created_at?: string;
+  debug_url?: string;
 }
 
 export interface ElectricRunMeta {
   run_id: string;
   tss_files: string[];
   created_at: string;
+  debug_url?: string;
 }
 
 export async function listElectricRuns(): Promise<ElectricRunMeta[]> {
@@ -275,6 +277,11 @@ export interface ElectricJobStatus {
   tss_files?: string[];
   created_at?: string;
   error?: string;
+  debug_url?: string;
+}
+
+export function getElectricDebugUrl(runId: string): string {
+  return `${API_BASE}/api/electric/debug/${runId}`;
 }
 
 export async function getElectricJobStatus(jobId: string): Promise<ElectricJobStatus> {

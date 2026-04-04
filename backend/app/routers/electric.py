@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # In-memory stores
 _electric_runs: dict[str, dict[str, str]] = {}   # run_id  → { tss_name: csv_str }
 _electric_jobs: dict[str, dict] = {}              # job_id  → { status, run_id?, tss_files?, error? }
+_electric_debug: dict[str, str] = {}             # run_id  → debug csv text (station mismatches)
 
 _ALLOWED_FILE_TYPES = {"rolling_stock", "station_points", "timetable", "route"}
 
@@ -111,7 +112,7 @@ def _run_pipeline_job(job_id: str, timetable_parts: list[str], route_parts: list
     try:
         combined_tt = combine_csvs(timetable_parts)
         combined_route = combine_route_csvs(route_parts)
-        tss_outputs = run_pipeline(
+        tss_outputs, debug_csv = run_pipeline(
             timetable_csv=combined_tt,
             route_csv=combined_route,
             rolling_stock_path=rolling_stock_path,
@@ -122,29 +123,53 @@ def _run_pipeline_job(job_id: str, timetable_parts: list[str], route_parts: list
         _electric_jobs[job_id] = {"status": "error", "error": str(exc)}
         return
 
+    run_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+    out_dir = electric_dir / "runs" / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save debug CSV whenever there are station mismatches (regardless of output)
+    debug_url: str | None = None
+    if debug_csv:
+        _electric_debug[run_id] = debug_csv
+        (out_dir / "debug_mismatches.csv").write_text(debug_csv, encoding="utf-8")
+        debug_url = f"/api/electric/debug/{run_id}"
+
     if not tss_outputs:
+        error_msg = (
+            "Pipeline produced no TSS outputs — all route segments have unresolved station names. "
+            "Check that station names in your route CSV match those in station_points.csv "
+            "(matching is case-insensitive but spelling must be exact)."
+        )
+        if debug_url:
+            error_msg += f" Download the mismatch report: {debug_url}"
+        # Save run metadata so the debug file is accessible from history
+        (out_dir / "metadata.json").write_text(
+            json.dumps({
+                "run_id": run_id, "tss_files": [], "created_at": created_at,
+                "debug_url": debug_url, "error": error_msg,
+            }),
+            encoding="utf-8",
+        )
         _electric_jobs[job_id] = {
             "status": "error",
-            "error": (
-                "Pipeline produced no outputs. Check that route_variant values in the "
-                "timetable match those in the route CSV, and that station names match "
-                "the station_points CSV."
-            ),
+            "error": error_msg,
+            "run_id": run_id,
+            "debug_url": debug_url,
         }
         return
 
-    run_id = str(uuid.uuid4())
     _electric_runs[run_id] = tss_outputs
     tss_files = [f"{name}.csv" for name in tss_outputs]
-    created_at = datetime.now(timezone.utc).isoformat()
 
-    # Persist to disk
-    out_dir = electric_dir / "runs" / run_id
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Persist TSS outputs to disk
     for tss_name, csv_text in tss_outputs.items():
         (out_dir / f"{tss_name}.csv").write_text(csv_text, encoding="utf-8")
     (out_dir / "metadata.json").write_text(
-        json.dumps({"run_id": run_id, "tss_files": tss_files, "created_at": created_at}),
+        json.dumps({
+            "run_id": run_id, "tss_files": tss_files, "created_at": created_at,
+            "debug_url": debug_url,
+        }),
         encoding="utf-8",
     )
 
@@ -153,6 +178,7 @@ def _run_pipeline_job(job_id: str, timetable_parts: list[str], route_parts: list
         "run_id": run_id,
         "tss_files": tss_files,
         "created_at": created_at,
+        "debug_url": debug_url,
     }
     logger.info("Electric job %s done — run %s: %d TSS outputs", job_id, run_id, len(tss_outputs))
 
@@ -249,6 +275,26 @@ async def get_electric_output(run_id: str, filename: str, request: Request) -> R
         )
 
     raise HTTPException(status_code=404, detail=f"Output '{filename}' not found for run '{run_id}'")
+
+
+@router.get("/debug/{run_id}")
+async def get_electric_debug(run_id: str, request: Request) -> Response:
+    """Download the station-mismatch debug CSV for a run (only present when mismatches occurred)."""
+    if run_id in _electric_debug:
+        return Response(
+            content=_electric_debug[run_id],
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=electric_debug_mismatches.csv"},
+        )
+    electric_dir = _get_electric_dir(request.app.state)
+    path = electric_dir / "runs" / run_id / "debug_mismatches.csv"
+    if path.exists():
+        return Response(
+            content=path.read_text(encoding="utf-8"),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=electric_debug_mismatches.csv"},
+        )
+    raise HTTPException(status_code=404, detail=f"No debug file for run '{run_id}'")
 
 
 # ---------------------------------------------------------------------------

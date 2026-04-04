@@ -36,6 +36,7 @@ import {
   getRouteDownloadUrl,
   getDebugDownloadUrl,
   getElectricOutputUrl,
+  getElectricDebugUrl,
   getSolarOutputUrl,
 } from '@/lib/api';
 
@@ -81,6 +82,9 @@ export default function Home() {
   const [electricProgress, setElectricProgress] = useState<string | null>(null);
   const [electricResult, setElectricResult] = useState<ElectricRunResult | null>(null);
   const [electricError, setElectricError] = useState<string | null>(null);
+  const [electricDebugUrl, setElectricDebugUrl] = useState<string | null>(null);
+  const [expandedTss, setExpandedTss] = useState<string | null>(null);
+  const [tssPreview, setTssPreview] = useState<Record<string, { headers: string[]; rows: string[][] }>>({});
 
   // ── Merge results ─────────────────────────────────────────────────────────
   const [merging, setMerging] = useState(false);
@@ -264,6 +268,9 @@ export default function Home() {
     setElectricProgress('Starting electric pipeline…');
     setElectricError(null);
     setElectricResult(null);
+    setElectricDebugUrl(null);
+    setExpandedTss(null);
+    setTssPreview({});
     try {
       // Returns 202 + job_id immediately
       const { job_id } = await runElectricPipeline(Array.from(selectedResultIds));
@@ -277,20 +284,52 @@ export default function Home() {
             run_id: job.run_id!,
             tss_files: job.tss_files!,
             created_at: job.created_at,
+            debug_url: job.debug_url,
           });
           listElectricRuns().then(setElectricRuns).catch(() => {});
           break;
         }
         if (job.status === 'error') {
-          throw new Error(job.error || 'Electric pipeline failed');
+          // Pass debug_url through the error so the UI can offer the mismatch report
+          const msg = job.error || 'Electric pipeline failed';
+          const err = new Error(msg) as Error & { debugUrl?: string; runId?: string };
+          if (job.debug_url) err.debugUrl = job.debug_url;
+          if (job.run_id) err.runId = job.run_id;
+          throw err;
         }
       }
     } catch (e) {
       setElectricError(e instanceof Error ? e.message : 'Electric pipeline failed');
+      const anyE = e as { debugUrl?: string };
+      if (anyE.debugUrl) setElectricDebugUrl(anyE.debugUrl);
     } finally {
       setElectricRunning(false);
       setElectricProgress(null);
     }
+  };
+
+  const handleLoadTssPreview = async (runId: string, filename: string) => {
+    const key = `${runId}/${filename}`;
+    if (tssPreview[key]) {
+      setExpandedTss(expandedTss === key ? null : key);
+      return;
+    }
+    try {
+      const resp = await fetch(getElectricOutputUrl(runId, filename));
+      const text = await resp.text();
+      const lines = text.trim().split('\n');
+      if (lines.length < 2) return;
+      const headers = lines[0].split(',');
+      // Show only Date, Day, Total Units columns for readability
+      const summaryIdx = [0, 1, 2]; // Date, Day, Total Units
+      const summaryHeaders = summaryIdx.map(i => headers[i] ?? '');
+      const rows = lines.slice(1).map(l => {
+        const cells = l.split(',');
+        return summaryIdx.map(i => cells[i] ?? '');
+      });
+      setTssPreview(prev => ({ ...prev, [key]: { headers: summaryHeaders, rows } }));
+      setExpandedTss(key);
+    } catch { /* ignore */ }
   };
 
   const handleMergeSelected = async () => {
@@ -865,20 +904,65 @@ export default function Home() {
 
         {electricResult && (
           <div style={{ marginTop: '1rem' }}>
-            <div className="success-box">Pipeline complete — {electricResult.tss_files.length} TSS output file{electricResult.tss_files.length !== 1 ? 's' : ''}</div>
-            <div className="button-row" style={{ marginTop: '0.5rem', flexWrap: 'wrap' }}>
-              {electricResult.tss_files.map(f => (
-                <a
-                  key={f}
-                  className="btn btn-download"
-                  href={getElectricOutputUrl(electricResult.run_id, f)}
-                  download={f}
-                  style={{ fontSize: '0.82rem' }}
-                >
-                  {f}
-                </a>
-              ))}
+            <div className="success-box">
+              Pipeline complete — {electricResult.tss_files.length} TSS output file{electricResult.tss_files.length !== 1 ? 's' : ''}
+              {electricResult.debug_url && (
+                <> &nbsp;|&nbsp;
+                  <a href={getElectricDebugUrl(electricResult.run_id)} download="electric_debug_mismatches.csv"
+                    style={{ color: 'inherit', textDecoration: 'underline', fontWeight: 500 }}>
+                    ⚠ Some station mismatches — download debug CSV
+                  </a>
+                </>
+              )}
             </div>
+            <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {electricResult.tss_files.map(f => {
+                const key = `${electricResult.run_id}/${f}`;
+                const preview = tssPreview[key];
+                return (
+                  <div key={f} style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: '0.375rem', overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.75rem', background: 'var(--card-bg, #f9fafb)', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 500, fontSize: '0.875rem', flex: 1 }}>{f}</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0.15rem 0.5rem', fontSize: '0.78rem' }}
+                        onClick={() => handleLoadTssPreview(electricResult.run_id, f)}
+                      >
+                        {expandedTss === key ? 'Hide' : 'View'}
+                      </button>
+                      <a className="btn btn-download" href={getElectricOutputUrl(electricResult.run_id, f)} download={f}
+                        style={{ padding: '0.15rem 0.5rem', fontSize: '0.78rem' }}>
+                        Download
+                      </a>
+                    </div>
+                    {expandedTss === key && preview && (
+                      <div className="table-wrapper" style={{ maxHeight: 240, overflowY: 'auto', padding: '0.5rem' }}>
+                        <table style={{ fontSize: '0.8rem' }}>
+                          <thead>
+                            <tr>{preview.headers.map((h, i) => <th key={i}>{h}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {preview.rows.map((row, ri) => (
+                              <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{ci === 2 ? parseFloat(cell).toFixed(1) : cell}</td>)}</tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {electricError && electricDebugUrl && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <a href={electricDebugUrl} download="electric_debug_mismatches.csv" className="btn btn-secondary"
+              style={{ fontSize: '0.82rem' }}>
+              Download Station Mismatch Report (debug CSV)
+            </a>
           </div>
         )}
 
@@ -904,18 +988,57 @@ export default function Home() {
                       <td style={{ fontSize: '0.8rem' }}>{new Date(run.created_at).toLocaleString()}</td>
                       <td>
                         <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-                          {run.tss_files.map(f => (
+                          {run.tss_files.map(f => {
+                            const key = `${run.run_id}/${f}`;
+                            const preview = tssPreview[key];
+                            return (
+                              <div key={f} style={{ display: 'flex', gap: '0.2rem' }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary"
+                                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
+                                  onClick={() => handleLoadTssPreview(run.run_id, f)}
+                                >
+                                  {expandedTss === key ? 'Hide' : f.replace('.csv', '')}
+                                </button>
+                                <a
+                                  className="btn btn-download"
+                                  href={getElectricOutputUrl(run.run_id, f)}
+                                  download={f}
+                                  style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
+                                >
+                                  ↓
+                                </a>
+                              </div>
+                            );
+                          })}
+                          {run.debug_url && (
                             <a
-                              key={f}
-                              className="btn btn-download"
-                              href={getElectricOutputUrl(run.run_id, f)}
-                              download={f}
-                              style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}
+                              className="btn btn-secondary"
+                              href={getElectricDebugUrl(run.run_id)}
+                              download="electric_debug_mismatches.csv"
+                              style={{ fontSize: '0.75rem', padding: '0.15rem 0.4rem', color: 'var(--warning, #b45309)' }}
                             >
-                              {f}
+                              ⚠ debug
                             </a>
-                          ))}
+                          )}
                         </div>
+                        {run.tss_files.map(f => {
+                          const key = `${run.run_id}/${f}`;
+                          const preview = tssPreview[key];
+                          return expandedTss === key && preview ? (
+                            <div key={f} className="table-wrapper" style={{ maxHeight: 200, overflowY: 'auto', marginTop: '0.4rem' }}>
+                              <table style={{ fontSize: '0.75rem' }}>
+                                <thead><tr>{preview.headers.map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
+                                <tbody>
+                                  {preview.rows.map((row, ri) => (
+                                    <tr key={ri}>{row.map((cell, ci) => <td key={ci}>{ci === 2 ? parseFloat(cell).toFixed(1) : cell}</td>)}</tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : null;
+                        })}
                       </td>
                     </tr>
                   ))}

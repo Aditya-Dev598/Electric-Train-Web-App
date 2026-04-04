@@ -316,13 +316,76 @@ def _aggregate_half_hour(events: pd.DataFrame) -> dict[str, str]:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _build_debug_csv(events: pd.DataFrame, route: pd.DataFrame, stations: pd.DataFrame) -> str | None:
+    """Build a debug CSV of station mismatches. Returns None if no mismatches exist."""
+    if events.empty or "missing_tss" not in events.columns:
+        return None
+
+    mismatches = events[events["missing_tss"] == True].copy()  # noqa: E712
+    if mismatches.empty:
+        return None
+
+    # Build the known station set (upper-cased, as used in lookup)
+    known = set(stations["Station"].astype(str).str.strip().str.upper().tolist())
+
+    rows = []
+    seen = set()
+    for _, r in mismatches.iterrows():
+        rv = r.get("route_variant", "")
+        fs = r.get("from_station", "")
+        ts = r.get("to_station", "")
+        key = (rv, fs, ts)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        missing_side = []
+        if fs and fs.upper() not in known:
+            missing_side.append("from_station")
+        if ts and ts.upper() not in known:
+            missing_side.append("to_station")
+
+        # Suggest close matches from station_points
+        def _suggest(name: str) -> str:
+            if not name:
+                return ""
+            name_u = name.upper()
+            return "; ".join(
+                s for s in sorted(known)
+                if name_u[:3] in s or s[:3] in name_u
+            )[:120] or "—"
+
+        rows.append({
+            "route_variant": rv,
+            "from_station": fs,
+            "to_station": ts,
+            "missing_side": " & ".join(missing_side) or "unknown",
+            "from_tss_resolved": str(r.get("from_tss", "") or ""),
+            "to_tss_resolved": str(r.get("to_tss", "") or ""),
+            "suggestion_from": _suggest(fs) if "from_station" in missing_side else "ok",
+            "suggestion_to": _suggest(ts) if "to_station" in missing_side else "ok",
+        })
+
+    if not rows:
+        return None
+
+    buf = io.StringIO()
+    fieldnames = ["route_variant", "from_station", "to_station", "missing_side",
+                  "from_tss_resolved", "to_tss_resolved", "suggestion_from", "suggestion_to"]
+    import csv as _csv
+    writer = _csv.DictWriter(buf, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
 def run_pipeline(
     timetable_csv: str,
     route_csv: str,
     rolling_stock_path: Path,
     station_points_path: Path,
     split_cross_tss: float = 0.5,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], str | None]:
     """Run the Electric Train energy pipeline.
 
     Args:
@@ -333,7 +396,10 @@ def run_pipeline(
         split_cross_tss: Fraction of cross-TSS segment energy assigned to the from-TSS.
 
     Returns:
-        Dict of TSS name (safe filename stem) → CSV string with 48 half-hour kWh bins.
+        Tuple of:
+        - Dict of TSS name (safe filename stem) → CSV string with 48 half-hour kWh bins.
+          Empty dict if no output was produced.
+        - Debug CSV string listing station mismatches, or None if all stations resolved.
     """
     tt = pd.read_csv(io.StringIO(timetable_csv.lstrip("\ufeff")))
     tt.columns = tt.columns.str.strip()
@@ -342,13 +408,6 @@ def run_pipeline(
     stations = pd.read_csv(station_points_path, encoding="utf-8-sig")
     stations.columns = stations.columns.str.strip()
 
-    for col in ["route_variant", "date", "dep_time", "train_type", "cars"]:
-        if col not in tt.columns and col not in (
-            {"departure_time", "distance_miles", "number_of_coaches", "train_class"}
-        ):
-            # Try format transform first
-            pass
-
     # Apply format transform (handles scraper column names transparently)
     tt = _transform_timetable(tt)
 
@@ -356,11 +415,6 @@ def run_pipeline(
     for col in ["route_variant", "date", "dep_time", "train_type", "cars"]:
         if col not in tt.columns:
             raise ValueError(f"Timetable CSV missing required column '{col}' (after transform)")
-    for col in ["route_variant", "seq", "from_station", "to_station", "distance", "run_min"]:
-        if col not in route.columns and col not in (
-            {"distance_miles"}
-        ):
-            pass
     if "distance_miles" in route.columns and "distance" not in route.columns:
         route = route.rename(columns={"distance_miles": "distance"})
     for col in ["route_variant", "seq", "from_station", "to_station", "distance", "run_min"]:
@@ -371,10 +425,11 @@ def run_pipeline(
             raise ValueError(f"station_points CSV missing required column '{col}'")
 
     energy_params = _load_energy_params(rolling_stock_path, tt["train_type"].astype(str).tolist())
-
     events = _expand_services(tt, route, stations, energy_params, split_cross_tss)
+    tss_outputs = _aggregate_half_hour(events)
+    debug_csv = _build_debug_csv(events, route, stations)
 
-    return _aggregate_half_hour(events)
+    return tss_outputs, debug_csv
 
 
 def combine_csvs(csv_texts: list[str]) -> str:

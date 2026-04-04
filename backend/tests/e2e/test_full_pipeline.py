@@ -192,7 +192,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         assert isinstance(result, dict)
         assert len(result) > 0, "Pipeline returned no TSS outputs"
 
@@ -200,7 +200,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         for name in result:
             assert name.replace("_", "").isalnum() or "_" in name, (
                 f"TSS name not safe: {name!r}"
@@ -210,7 +210,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline, BIN_LABELS
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         for tss_name, csv_text in result.items():
             df = pd.read_csv(io.StringIO(csv_text))
             bin_cols = [c for c in df.columns if c in BIN_LABELS]
@@ -222,7 +222,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline, BIN_LABELS
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         for tss_name, csv_text in result.items():
             df = pd.read_csv(io.StringIO(csv_text))
             bin_cols = [c for c in df.columns if c in BIN_LABELS]
@@ -234,7 +234,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline, BIN_LABELS
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         for tss_name, csv_text in result.items():
             df = pd.read_csv(io.StringIO(csv_text))
             bin_cols = [c for c in df.columns if c in BIN_LABELS]
@@ -246,7 +246,7 @@ class TestElectricPipeline:
         from backend.app.services.electric_pipeline import run_pipeline, BIN_LABELS
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
+        result, _debug = run_pipeline(_make_timetable_csv(), _make_route_csv(), rs, sp)
         for tss_name, csv_text in result.items():
             df = pd.read_csv(io.StringIO(csv_text))
             bin_cols = [c for c in df.columns if c in BIN_LABELS]
@@ -267,7 +267,7 @@ class TestElectricTransform:
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
         # Should not raise even with scraper-format column names
-        result = run_pipeline(
+        result, _debug = run_pipeline(
             _make_timetable_csv(scraper_format=True),
             _make_route_csv(), rs, sp,
         )
@@ -277,7 +277,7 @@ class TestElectricTransform:
         from backend.app.services.electric_pipeline import run_pipeline
         rs = _make_rolling_stock_csv(tmp_path)
         sp = _make_station_points_csv(tmp_path)
-        result = run_pipeline(
+        result, _debug = run_pipeline(
             _make_timetable_csv(scraper_format=False),
             _make_route_csv(), rs, sp,
         )
