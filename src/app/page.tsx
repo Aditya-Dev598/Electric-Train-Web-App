@@ -24,6 +24,7 @@ import {
   uploadCIF,
   listResults,
   deleteResult,
+  loadResultMetadata,
   getElectricStatus,
   uploadElectricFile,
   runElectricPipeline,
@@ -210,6 +211,14 @@ export default function Home() {
     setSelectedResultIds(prev => { const s = new Set(prev); s.delete(id); return s; });
     if (activeEditorResult?.id === id) setActiveEditorResult(null);
     if (result?.generation_id === id) setResult(null);
+  };
+
+  const handleRestoreResult = async (id: string) => {
+    try {
+      const meta = await loadResultMetadata(id);
+      setResult(meta);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch { /* ignore */ }
   };
 
   const toggleResultSelection = (id: string) => {
@@ -733,14 +742,25 @@ export default function Home() {
                         </button>
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem', color: 'var(--error, #dc2626)' }}
-                          onClick={() => handleDeleteResult(r.generation_id)}
-                        >
-                          Delete
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.3rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            title="Restore this result to the top panel"
+                            style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem' }}
+                            onClick={() => handleRestoreResult(r.generation_id)}
+                          >
+                            ↑ Load
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem', color: 'var(--error, #dc2626)' }}
+                            onClick={() => handleDeleteResult(r.generation_id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

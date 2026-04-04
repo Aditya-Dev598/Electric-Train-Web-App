@@ -352,6 +352,15 @@ async def list_results(request: Request) -> JSONResponse:
     return JSONResponse(content=results)
 
 
+@router.get("/results/{gen_id}/metadata")
+async def get_result_metadata(gen_id: str, request: Request) -> JSONResponse:
+    """Return the full metadata (summary, warnings, provenance) for a stored result."""
+    meta = request.app.state.result_store.load_metadata(gen_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return JSONResponse(content={"generation_id": gen_id, **meta})
+
+
 @router.delete("/results/{gen_id}")
 async def delete_result(gen_id: str, request: Request) -> JSONResponse:
     """Delete a persisted result from disk."""

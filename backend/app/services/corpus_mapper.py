@@ -28,6 +28,7 @@ class CorpusMapper:
         self._by_name: dict[str, list[StationMapping]] = {}
         self._by_crs: dict[str, list[StationMapping]] = {}
         self._by_tiploc: dict[str, StationMapping] = {}
+        self._by_prefix: dict[str, list[str]] = {}  # 4-char prefix → list of TIPLOCs
         self._loaded = False
         self._file_date: Optional[str] = None
 
@@ -67,6 +68,11 @@ class CorpusMapper:
             )
 
             self._by_tiploc[tiploc.upper()] = mapping
+
+            # 4-char prefix index — groups WATRLOO, WATRLMN, WATRLOW etc. under "WATR"
+            prefix = tiploc.upper()[:4]
+            if len(prefix) == 4:
+                self._by_prefix.setdefault(prefix, []).append(tiploc.upper())
 
             if crs:
                 self._by_crs.setdefault(crs.upper(), []).append(mapping)
@@ -174,6 +180,18 @@ class CorpusMapper:
             return [m for _, m in candidates]
 
         return None
+
+    def tiploc_variants(self, tiploc: str) -> list[str]:
+        """Return all CORPUS TIPLOCs that share the same 4-char prefix.
+
+        Used to expand a single resolved TIPLOC to all physical variants of
+        the same station, e.g. WATRLOO → [WATRLOO, WATRLMN, WATRLOW, WATR]
+        so that CIF schedule filtering doesn't miss platform-level TIPLOCs.
+        """
+        if not self._loaded:
+            return [tiploc.upper()]
+        prefix = tiploc.upper()[:4]
+        return self._by_prefix.get(prefix, [tiploc.upper()])
 
     def tiploc_to_crs(self, tiploc: str) -> Optional[str]:
         """Resolve a TIPLOC to its CRS code. Returns None if not found."""

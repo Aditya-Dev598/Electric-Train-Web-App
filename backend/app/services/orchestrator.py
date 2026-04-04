@@ -102,16 +102,20 @@ class Orchestrator:
         # TIPLOCs from every returned mapping so we don't miss alternate CIF entries
         # for the same physical station (e.g. Waterloo has WATRLOO + WATRLMN in CIF).
         station = station_mappings[0]
-        all_tiplocs = list(dict.fromkeys(
+        # Collect all TIPLOCs from CORPUS matches, then expand each with prefix
+        # variants (e.g. WATRLOO → also WATRLMN, WATRLOW etc.) so CIF filtering
+        # doesn't miss platform/track-level TIPLOCs that share no CRS code.
+        core_tiplocs = list(dict.fromkeys(
             m.tiploc.upper() for m in station_mappings if m.tiploc
         ))
-        if len(station_mappings) > 1:
-            extra_crs = [m.crs_code for m in station_mappings[1:] if m.crs_code]
-            if extra_crs:
-                result.warnings.append(
-                    f"Multiple CRS/TIPLOCs matched '{station_name}' — searching across all: "
-                    f"{', '.join(all_tiplocs)}."
-                )
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for t in core_tiplocs:
+            for variant in self._corpus.tiploc_variants(t):
+                if variant not in seen:
+                    expanded.append(variant)
+                    seen.add(variant)
+        all_tiplocs = expanded
 
         self._audit.log_corpus_lookup(
             station_name, station.crs_code, station.tiploc, True,

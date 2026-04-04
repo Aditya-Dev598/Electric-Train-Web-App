@@ -208,6 +208,12 @@ export async function deleteResult(generationId: string): Promise<void> {
   if (!resp.ok) throw new Error(`Delete failed: ${resp.status}`);
 }
 
+export async function loadResultMetadata(generationId: string): Promise<GenerationResult> {
+  const resp = await fetch(`${API_BASE}/api/results/${generationId}/metadata`);
+  if (!resp.ok) throw new Error(`Failed to load result: ${resp.status}`);
+  return await resp.json();
+}
+
 // ---------------------------------------------------------------------------
 // Electric pipeline (Phase 4)
 // ---------------------------------------------------------------------------
