@@ -98,25 +98,31 @@ class Orchestrator:
             self._audit.log_corpus_lookup(station_name, None, None, False)
             return result
 
-        # Use first match (exact match guarantees specificity)
+        # Use first match as the primary (for display / audit), but collect ALL
+        # TIPLOCs from every returned mapping so we don't miss alternate CIF entries
+        # for the same physical station (e.g. Waterloo has WATRLOO + WATRLMN in CIF).
         station = station_mappings[0]
+        all_tiplocs = list(dict.fromkeys(
+            m.tiploc.upper() for m in station_mappings if m.tiploc
+        ))
         if len(station_mappings) > 1:
-            result.warnings.append(
-                f"Multiple stations matched '{station_name}': "
-                f"{', '.join(m.crs_code or m.tiploc for m in station_mappings)}. "
-                f"Using first match: {station.crs_code or station.tiploc}."
-            )
+            extra_crs = [m.crs_code for m in station_mappings[1:] if m.crs_code]
+            if extra_crs:
+                result.warnings.append(
+                    f"Multiple CRS/TIPLOCs matched '{station_name}' — searching across all: "
+                    f"{', '.join(all_tiplocs)}."
+                )
 
         self._audit.log_corpus_lookup(
             station_name, station.crs_code, station.tiploc, True,
         )
 
-        tiploc = station.tiploc.upper()
+        tiploc = station.tiploc.upper()  # primary (used for display)
         crs = station.crs_code.upper() if station.crs_code else ""
 
         # --- Step 2: Filter CIF schedules ---
         all_schedules = self._cif.schedules
-        filtered = filter_schedules(all_schedules, operator_code, tiploc)
+        filtered = filter_schedules(all_schedules, operator_code, station_tiplocs=all_tiplocs)
 
         if not filtered:
             if not all_schedules:
@@ -171,13 +177,13 @@ class Orchestrator:
         for _, effective in all_effective_schedules:
             for schedule in effective:
                 key = (schedule.train_uid, schedule.stp_indicator, schedule.date_runs_from)
-                if key not in _seen_schedules and get_departure_at_station(schedule, tiploc):
+                if key not in _seen_schedules and get_departure_at_station(schedule, all_tiplocs):
                     _seen_schedules.add(key)
                     all_effective_flat.append(schedule)
 
         # --- Step 5: Build route patterns and assign variant names ---
         # Must happen before timetable rows so each row can reference its variant.
-        unique_routes = identify_unique_routes(all_effective_flat, self._corpus, tiploc)
+        unique_routes = identify_unique_routes(all_effective_flat, self._corpus, all_tiplocs[0])
         pattern_to_variant = generate_variant_names(unique_routes, self._corpus)
 
         for pattern, representative_schedule in unique_routes.items():
@@ -199,7 +205,7 @@ class Orchestrator:
 
         for d, effective in all_effective_schedules:
             for schedule in effective:
-                dep_time_raw = get_departure_at_station(schedule, tiploc)
+                dep_time_raw = get_departure_at_station(schedule, all_tiplocs)
                 if not dep_time_raw:
                     continue
 
@@ -208,7 +214,7 @@ class Orchestrator:
                 dep_formatted = minutes_to_hhmmss(dep_minutes)
 
                 # Look up route_variant for this schedule's stopping pattern
-                pattern = extract_stopping_pattern(schedule, self._corpus, tiploc)
+                pattern = extract_stopping_pattern(schedule, self._corpus, all_tiplocs[0])
                 variant_name = pattern_to_variant.get(pattern, "")
 
                 # Darwin enrichment
@@ -231,7 +237,7 @@ class Orchestrator:
                 if coaches is None:
                     coaches = cif_coach_count(schedule.timing_load, schedule.power_type)
 
-                stop_type = get_stop_type_at_station(schedule, tiploc) or "stop"
+                stop_type = get_stop_type_at_station(schedule, all_tiplocs) or "stop"
 
                 result.timetable_rows.append(TimetableRow(
                     date=d.isoformat(),

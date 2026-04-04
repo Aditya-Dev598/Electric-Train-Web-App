@@ -98,11 +98,15 @@ def filter_schedules(
     schedules: list[CIFSchedule],
     operator_code: Optional[str] = None,
     station_tiploc: Optional[str] = None,
+    station_tiplocs: Optional[list[str]] = None,
 ) -> list[CIFSchedule]:
-    """Filter schedules by operator code and/or station TIPLOC.
+    """Filter schedules by operator code and/or station TIPLOC(s).
 
     Operator filtering uses the ATOC code from the BX record.
-    Station filtering checks if any location in the schedule matches the TIPLOC.
+    Station filtering checks if any location in the schedule matches any of the
+    given TIPLOCs. Pass station_tiplocs (list) to match across multiple TIPLOCs
+    for the same station (e.g. Waterloo has WATRLOO, WATRLMN, etc.).
+    station_tiploc (single string) is kept for backward compatibility.
     """
     result = schedules
 
@@ -110,11 +114,17 @@ def filter_schedules(
         op = operator_code.strip().upper()
         result = [s for s in result if s.atoc_code.upper() == op]
 
+    # Merge single and list args into one set
+    tiploc_set: set[str] = set()
     if station_tiploc:
-        tiploc = station_tiploc.strip().upper()
+        tiploc_set.add(station_tiploc.strip().upper())
+    if station_tiplocs:
+        tiploc_set.update(t.strip().upper() for t in station_tiplocs)
+
+    if tiploc_set:
         result = [
             s for s in result
-            if any(loc.tiploc.upper() == tiploc for loc in s.locations)
+            if any(loc.tiploc.upper() in tiploc_set for loc in s.locations)
         ]
 
     return result
@@ -122,16 +132,21 @@ def filter_schedules(
 
 def get_departure_at_station(
     schedule: CIFSchedule,
-    station_tiploc: str,
+    station_tiploc: str | list[str],
 ) -> Optional[str]:
     """Get the departure time at a specific station for a schedule.
 
+    station_tiploc can be a single TIPLOC string or a list of TIPLOCs
+    (for stations with multiple CIF entries, e.g. Waterloo).
     Returns the public or scheduled departure time as HHMM string,
     or None if the station is not found or has no departure (terminus).
     """
-    tiploc = station_tiploc.strip().upper()
+    if isinstance(station_tiploc, list):
+        tiploc_set = {t.strip().upper() for t in station_tiploc}
+    else:
+        tiploc_set = {station_tiploc.strip().upper()}
     for loc in schedule.locations:
-        if loc.tiploc.upper() == tiploc:
+        if loc.tiploc.upper() in tiploc_set:
             dep = loc.departure_time_str
             if dep:
                 return dep
@@ -140,16 +155,20 @@ def get_departure_at_station(
 
 def get_stop_type_at_station(
     schedule: CIFSchedule,
-    station_tiploc: str,
+    station_tiploc: str | list[str],
 ) -> Optional[str]:
     """Return 'stop' or 'pass' for a station in a schedule, or None if not found.
 
+    station_tiploc can be a single TIPLOC string or a list of TIPLOCs.
     'stop'  — the train calls at this station (LO/LT, or LI with public times/activity).
     'pass'  — the train passes through without stopping (LI with only a pass time).
     """
-    tiploc = station_tiploc.strip().upper()
+    if isinstance(station_tiploc, list):
+        tiploc_set = {t.strip().upper() for t in station_tiploc}
+    else:
+        tiploc_set = {station_tiploc.strip().upper()}
     for loc in schedule.locations:
-        if loc.tiploc.upper() == tiploc:
+        if loc.tiploc.upper() in tiploc_set:
             return "stop" if loc.is_passenger_stop else "pass"
     return None
 

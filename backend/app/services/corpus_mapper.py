@@ -26,7 +26,7 @@ class CorpusMapper:
     def __init__(self, corpus_path: str) -> None:
         self._path = corpus_path
         self._by_name: dict[str, list[StationMapping]] = {}
-        self._by_crs: dict[str, StationMapping] = {}
+        self._by_crs: dict[str, list[StationMapping]] = {}
         self._by_tiploc: dict[str, StationMapping] = {}
         self._loaded = False
         self._file_date: Optional[str] = None
@@ -69,7 +69,7 @@ class CorpusMapper:
             self._by_tiploc[tiploc.upper()] = mapping
 
             if crs:
-                self._by_crs[crs.upper()] = mapping
+                self._by_crs.setdefault(crs.upper(), []).append(mapping)
 
             if name:
                 key = name.upper()
@@ -126,9 +126,9 @@ class CorpusMapper:
         if not q:
             return None
 
-        # 1. CRS exact match (3 letters)
-        if len(q) == 3 and q in self._by_crs:
-            return [self._by_crs[q]]
+        # 1. CRS exact match (2-4 letters to cover edge cases)
+        if 2 <= len(q) <= 4 and q in self._by_crs:
+            return self._by_crs[q]
 
         # 2. TIPLOC exact match
         if q in self._by_tiploc:
