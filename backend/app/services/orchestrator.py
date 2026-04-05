@@ -128,6 +128,46 @@ class Orchestrator:
         all_schedules = self._cif.schedules
         filtered = filter_schedules(all_schedules, operator_code, station_tiplocs=all_tiplocs)
 
+        if not filtered and all_schedules:
+            # --- CIF-native TIPLOC discovery fallback ---
+            # CORPUS maps WAT→WATRLOO, but CIF may use WATRLMN/WATRLOW or other
+            # variants whose CORPUS name still contains the station's key word(s).
+            # Scan all TIPLOCs from the operator's schedules, resolve each via
+            # CORPUS, and match names against the query words.
+            by_operator = filter_schedules(all_schedules, operator_code, None)
+            if by_operator:
+                # Extract words that identify the station (drop "LONDON" as noise)
+                query_words = {
+                    w for w in station_name.upper().split()
+                    if w not in ("LONDON", "ST", "THE", "AND")
+                }
+                # Build TIPLOCs present in CIF for this operator
+                cif_op_tiplocs: set[str] = {
+                    loc.tiploc.upper()
+                    for s in by_operator
+                    for loc in s.locations
+                }
+                # Find TIPLOCs whose CORPUS name contains any query word
+                cif_matched: list[str] = []
+                seen_cif: set[str] = set()
+                for t in cif_op_tiplocs:
+                    corpus_name = (self._corpus.tiploc_to_name(t) or "").upper()
+                    if any(w in corpus_name for w in query_words):
+                        if t not in seen_cif:
+                            cif_matched.append(t)
+                            seen_cif.add(t)
+
+                if cif_matched:
+                    filtered = filter_schedules(
+                        all_schedules, operator_code, station_tiplocs=cif_matched
+                    )
+                    if filtered:
+                        all_tiplocs = cif_matched
+                        logger.info(
+                            "CIF-native TIPLOC discovery for '%s': found %d matching TIPLOCs %s",
+                            station_name, len(cif_matched), cif_matched[:5],
+                        )
+
         if not filtered:
             if not all_schedules:
                 result.warnings.append(
@@ -148,8 +188,9 @@ class Orchestrator:
                 else:
                     result.warnings.append(
                         f"Operator '{operator_code}' has {len(by_operator)} schedule(s) in CIF "
-                        f"but none call at station '{tiploc}' ({crs}). "
-                        "Verify the station TIPLOC or CRS code is correct."
+                        f"but none call at station '{station_name}' "
+                        f"(searched TIPLOCs: {', '.join(all_tiplocs[:8])}). "
+                        "The CIF may not contain services for this station/operator combination."
                     )
             return result
 

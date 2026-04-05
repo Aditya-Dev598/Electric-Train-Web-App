@@ -37,6 +37,9 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# Bundled static coordinate file (ships with the repo; used when cache is absent)
+BUNDLED_COORDS_PATH = Path(__file__).parent.parent.parent.parent / "data" / "mileage" / "uk_station_coords.json"
+
 # Empirical factor: UK rail distance ≈ straight-line × 1.15
 _RAIL_FACTOR = 1.15
 _EARTH_RADIUS_MILES = 3958.8
@@ -61,9 +64,10 @@ def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
 class _CoordinateFallback:
     """Estimates rail distances and average elevation from OSM station coordinates.
 
-    Uses the public Overpass API for lat/lon (no registration, no API key).
-    Uses the public OpenTopoData SRTM 30m API for elevation (no registration).
-    Results are cached locally so network is only hit once per installation.
+    Load order:
+    1. Local .coord_cache.json (fast, persisted from a previous Overpass fetch)
+    2. Bundled uk_station_coords.json (static fallback, ships with the repo)
+    3. Overpass API + OpenTopoData (one-time live fetch, result saved to cache)
 
     Cache format: { "CRS": [lat, lon, elev_m_or_null], ... }
     """
@@ -78,32 +82,58 @@ class _CoordinateFallback:
 
     def __init__(self, cache_path: Path) -> None:
         self._cache_path = cache_path
+        # Bundled static file lives next to the cache in the mileage data dir
+        self._static_path = cache_path.parent / "uk_station_coords.json"
         # CRS (upper) → (lat, lon, elev_m or None)
         self._coords: dict[str, tuple[float, float, Optional[float]]] = {}
         self._loaded = False
         self._fetch_attempted = False  # prevent retrying after a failed network fetch
 
+    def _parse_coords_dict(self, raw: dict) -> dict[str, tuple[float, float, Optional[float]]]:
+        """Parse a {CRS: [lat, lon, elev?]} dict into the internal format."""
+        loaded: dict[str, tuple[float, float, Optional[float]]] = {}
+        for k, v in raw.items():
+            if isinstance(v, (list, tuple)) and len(v) >= 2:
+                lat, lon = float(v[0]), float(v[1])
+                elev = float(v[2]) if len(v) >= 3 and v[2] is not None else None
+                loaded[k.upper()] = (lat, lon, elev)
+        return loaded
+
     def load(self) -> None:
-        """Load from local cache, or fetch from Overpass + OpenTopoData and save."""
+        """Load from local cache, bundled static file, or Overpass API."""
         if self._fetch_attempted:
             return  # don't retry a failed network fetch on every segment
 
+        # 1. Try the persisted coordinate cache (fastest path)
         if self._cache_path.exists():
             try:
                 raw = json.loads(self._cache_path.read_text(encoding="utf-8"))
-                loaded: dict[str, tuple[float, float, Optional[float]]] = {}
-                for k, v in raw.items():
-                    if isinstance(v, (list, tuple)) and len(v) >= 2:
-                        lat, lon = float(v[0]), float(v[1])
-                        elev = float(v[2]) if len(v) >= 3 and v[2] is not None else None
-                        loaded[k] = (lat, lon, elev)
-                self._coords = loaded
-                self._loaded = bool(self._coords)
-                logger.info("Coordinate cache loaded: %d rail stations", len(self._coords))
-                return
+                loaded = self._parse_coords_dict(raw)
+                if loaded:
+                    self._coords = loaded
+                    self._loaded = True
+                    logger.info("Coordinate cache loaded: %d rail stations", len(self._coords))
+                    return
             except Exception as exc:
                 logger.warning("Could not read coordinate cache: %s — re-fetching", exc)
 
+        # 2. Try the bundled static file (works offline, ships with the repo)
+        if self._static_path.exists():
+            try:
+                raw = json.loads(self._static_path.read_text(encoding="utf-8"))
+                loaded = self._parse_coords_dict(raw)
+                if loaded:
+                    self._coords = loaded
+                    self._loaded = True
+                    logger.info(
+                        "Bundled UK station coords loaded: %d stations from %s",
+                        len(self._coords), self._static_path.name,
+                    )
+                    return
+            except Exception as exc:
+                logger.warning("Could not read bundled station coords: %s", exc)
+
+        # 3. Fall back to Overpass API (requires network; result saved to cache)
         self._fetch_attempted = True
         self._fetch_and_cache()
 
