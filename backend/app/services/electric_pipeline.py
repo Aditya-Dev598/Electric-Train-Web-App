@@ -204,8 +204,37 @@ def _expand_services(
         for _, seg in segs.iterrows():
             from_st = str(seg["from_station"]).strip().upper()
             to_st = str(seg["to_station"]).strip().upper()
-            dist_km = float(seg["distance"]) * 1.609344
-            run_min = float(seg["run_min"])
+
+            dist_raw = seg.get("distance", "")
+            run_raw  = seg.get("run_min", "")
+            try:
+                _dist_mi = float(dist_raw)
+                if _dist_mi != _dist_mi:   # NaN check
+                    raise ValueError
+            except (TypeError, ValueError):
+                _dist_mi = None
+            try:
+                _run_min = float(run_raw)
+                if _run_min != _run_min:   # NaN check
+                    raise ValueError
+            except (TypeError, ValueError):
+                _run_min = None
+
+            if _dist_mi is None or _run_min is None:
+                logger.warning(
+                    "Skipping segment %s→%s in variant '%s': blank/invalid distance or run_min",
+                    from_st, to_st, rv,
+                )
+                records.append({
+                    "service_row": idx, "route_variant": rv,
+                    "from_station": from_st, "to_station": to_st,
+                    "missing_tss": True, "from_tss": None, "to_tss": None,
+                })
+                cur_dt += timedelta(minutes=(_run_min or 0))
+                continue
+
+            dist_km = _dist_mi * 1.609344
+            run_min = _run_min
             # Bug 1 fix: use wait_min instead of dwell_time
             dwell_min = float(seg.get("wait_min", 0.0) or 0.0)
 
@@ -433,11 +462,24 @@ def run_pipeline(
 
 
 def combine_csvs(csv_texts: list[str]) -> str:
-    """Combine multiple timetable CSV texts, deduplicating on logical key.
+    """Combine multiple timetable CSV texts with service-level deduplication.
 
-    Two rows are considered duplicates when (date, departure_time, route_variant)
-    match.  Among duplicates the row with the most non-empty fields is kept,
-    so train_class / coaches from Darwin enrichment are preserved when present.
+    Dedup key: (date, train_uid, origin_departure) when both columns are present.
+    - train_uid identifies the CIF schedule.
+    - origin_departure (LO record scheduled_departure) disambiguates STP P+N
+      services that share a UID but depart their origin at different times.
+
+    This ensures the same physical service appearing in multiple station outputs
+    (e.g. Fleet + Camberley) is collapsed to one row, while genuinely distinct
+    services — including STP New workings alongside a Permanent with the same UID
+    — are correctly preserved.
+
+    Among duplicates the row with the most non-empty fields is kept; ties are
+    broken by earliest departure_time (pre-sorted ascending) so the station
+    closest to the service origin is preferred.
+
+    Fallback: (date, departure_time, route_variant) for legacy CSVs that lack
+    the train_uid / origin_departure columns.
     """
     frames = [
         pd.read_csv(io.StringIO(t.lstrip("\ufeff")))
@@ -447,8 +489,20 @@ def combine_csvs(csv_texts: list[str]) -> str:
         return ""
     combined = pd.concat(frames, ignore_index=True)
 
-    key_cols = ["date", "departure_time", "route_variant"]
-    # Only deduplicate on key cols if they all exist; otherwise fall back to exact match
+    service_key = ["date", "train_uid", "origin_departure"]
+    legacy_key = ["date", "departure_time", "route_variant"]
+
+    if (
+        all(c in combined.columns for c in service_key)
+        and combined["train_uid"].notna().any()
+    ):
+        key_cols = service_key
+        # Pre-sort by departure_time ascending: on a score tie the row from the
+        # station closest to the service origin (earliest dep_time) is kept.
+        combined = combined.sort_values("departure_time", ascending=True)
+    else:
+        key_cols = legacy_key
+
     if all(c in combined.columns for c in key_cols):
         # Score each row by number of non-empty / non-null fields (higher = more data)
         combined["_score"] = combined.apply(

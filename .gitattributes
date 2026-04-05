@@ -1,1 +1,4 @@
 *.cif filter=lfs diff=lfs merge=lfs -text
+*.CIF filter=lfs diff=lfs merge=lfs -text
+*.CIF.gz filter=lfs diff=lfs merge=lfs -text
+*.cif.gz filter=lfs diff=lfs merge=lfs -text

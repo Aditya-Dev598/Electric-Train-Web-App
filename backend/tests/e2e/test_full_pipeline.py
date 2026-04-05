@@ -10,6 +10,7 @@ Tests:
   4. test_solar_pipeline_synthetic         — solar analysis pipeline with synthetic inputs
   5. test_electric_transform               — format transform from scraper → pipeline columns
   6. test_combine_route_csv_deduplication  — multi-result route deduplication
+  7. test_combine_timetable_deduplication  — service-level timetable merge / dedup
 """
 
 from __future__ import annotations
@@ -311,6 +312,94 @@ class TestCombineRoutes:
         combined = combine_route_csvs([csv_a, csv_b])
         df = pd.read_csv(io.StringIO(combined))
         assert set(df["route_variant"]) == {"R1", "R2"}
+
+
+# ---------------------------------------------------------------------------
+# 7. Timetable combine / service-level deduplication
+# ---------------------------------------------------------------------------
+
+class TestCombineTimetable:
+    """Timetable CSV merge and service-level deduplication tests.
+
+    Dedup key: (date, train_uid, origin_departure).
+    Fallback:  (date, departure_time, route_variant) for legacy CSVs.
+    """
+
+    _COLS = ("route_variant,train_uid,origin_departure,stop_type,"
+             "date,departure_time,train_class,number_of_coaches")
+
+    def _csv(self, rows: list[str]) -> str:
+        return self._COLS + "\n" + "\n".join(rows) + "\n"
+
+    def test_exact_duplicate_removed(self):
+        """Identical row present in two CSVs → 1 row after merge."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        row = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:05:00,Electric,8"
+        merged = combine_csvs([self._csv([row]), self._csv([row])])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 1, f"Expected 1 row, got {len(df)}"
+
+    def test_same_service_different_stations_deduped(self):
+        """Same physical service queried at two different stations (different
+        departure_time, same train_uid + origin_departure) → 1 row after merge,
+        keeping the earliest departure_time."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        fleet_row = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:05:00,Electric,8"
+        camb_row  = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:15:00,Electric,8"
+        merged = combine_csvs([self._csv([fleet_row]), self._csv([camb_row])])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 1, f"Expected 1 row, got {len(df)}"
+        assert df.iloc[0]["departure_time"] == "08:05:00", (
+            f"Expected earliest departure 08:05:00, got {df.iloc[0]['departure_time']}"
+        )
+
+    def test_stp_pn_same_uid_kept_separate(self):
+        """STP P and N services sharing the same train_uid but running at different
+        origin departure times must NOT be collapsed — they are distinct trains."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        # P service: origin=0800; N service: origin=0900 (same UID, same date)
+        p_row = "Waterloo - Basingstoke,A12345,0800,stop,2025-01-06,08:10:00,Electric,8"
+        n_row = "Waterloo - Basingstoke,A12345,0900,stop,2025-01-06,09:10:00,Electric,8"
+        merged = combine_csvs([self._csv([p_row, n_row])])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 2, (
+            f"Expected 2 rows (P and N must stay separate), got {len(df)}"
+        )
+
+    def test_richer_row_wins_on_score_tie(self):
+        """When (train_uid, origin_departure, date) match but one row has more
+        data (train_class populated), the richer row is kept."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        sparse = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:05:00,,8"
+        rich   = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:15:00,Electric,8"
+        merged = combine_csvs([self._csv([sparse]), self._csv([rich])])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 1, f"Expected 1 row, got {len(df)}"
+        assert df.iloc[0]["train_class"] == "Electric", (
+            f"Expected richer row (train_class=Electric) to win, got {df.iloc[0]['train_class']}"
+        )
+
+    def test_distinct_services_both_kept(self):
+        """Two different services (different train_uids) on the same date must
+        both be present after merge."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        svc_x = "Waterloo - Basingstoke,W12345,0755,stop,2025-01-06,08:05:00,Electric,8"
+        svc_y = "Waterloo - Basingstoke,W67890,0900,stop,2025-01-06,09:05:00,Electric,8"
+        merged = combine_csvs([self._csv([svc_x]), self._csv([svc_y])])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 2, f"Expected 2 rows (X and Y), got {len(df)}"
+        assert set(df["train_uid"]) == {"W12345", "W67890"}
+
+    def test_fallback_to_legacy_key_without_train_uid(self):
+        """Legacy CSVs that lack train_uid/origin_departure fall back to the
+        (date, departure_time, route_variant) key and still deduplicate."""
+        from backend.app.services.electric_pipeline import combine_csvs
+        legacy_cols = "route_variant,stop_type,date,departure_time,train_class,number_of_coaches"
+        row = "Waterloo - Basingstoke,stop,2025-01-06,08:05:00,Electric,8"
+        csv_text = legacy_cols + "\n" + row + "\n"
+        merged = combine_csvs([csv_text, csv_text])
+        df = pd.read_csv(io.StringIO(merged))
+        assert len(df) == 1, f"Expected 1 row after legacy dedup, got {len(df)}"
 
 
 # ---------------------------------------------------------------------------

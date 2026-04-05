@@ -1,7 +1,7 @@
 """CSV exporter with injection protection and proper formatting.
 
 Generates:
-- Timetable CSV (route_variant, stop_type, date, departure_time, train_class, number_of_coaches)
+- Timetable CSV (route_variant, train_uid, origin_departure, stop_type, date, departure_time, train_class, number_of_coaches)
 - Route CSV (route_variant, seq, from_station, to_station, stop_type,
              distance_miles, avg_elevation_m, run_min, wait_min)
 - Debug CSV (service identifiers, matching results, CIF BS fields, missing field reasons)
@@ -47,14 +47,16 @@ def _n(value: object) -> object:
 def generate_timetable_csv(rows: list[TimetableRow]) -> str:
     """Generate the timetable CSV string."""
     output = io.StringIO()
-    fieldnames = ["route_variant", "stop_type", "date", "departure_time",
-                  "train_class", "number_of_coaches"]
+    fieldnames = ["route_variant", "train_uid", "origin_departure", "stop_type",
+                  "date", "departure_time", "train_class", "number_of_coaches"]
     writer = csv.DictWriter(output, fieldnames=fieldnames, quoting=csv.QUOTE_MINIMAL)
     writer.writeheader()
 
     for row in rows:
         writer.writerow({
             "route_variant": sanitize_csv_value(row.route_variant),
+            "train_uid": sanitize_csv_value(row.train_uid),
+            "origin_departure": sanitize_csv_value(row.origin_departure),
             "stop_type": sanitize_csv_value(row.stop_type),
             "date": sanitize_csv_value(row.date),
             "departure_time": sanitize_csv_value(row.departure_time),

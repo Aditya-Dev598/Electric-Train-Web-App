@@ -9,6 +9,7 @@ Download from: https://datafeeds.networkrail.co.uk/ or Rail Data Marketplace.
 
 from __future__ import annotations
 
+import gzip
 import logging
 from datetime import date, datetime
 from pathlib import Path
@@ -115,37 +116,56 @@ class CIFParser:
         return self._schedules
 
     def parse_file(self, file_path: str) -> list[CIFSchedule]:
-        """Parse a CIF/MCA file and return all schedules."""
+        """Parse a CIF/MCA file and return all schedules.
+
+        Supports plain text files (.cif, .CIF, .mca, .MCA) and gzip-compressed
+        variants (.cif.gz, .CIF.gz, etc.).  Git LFS pointer detection is skipped
+        for .gz files since they are binary and cannot be mistaken for a pointer.
+        """
         path = Path(file_path)
         if not path.exists():
             logger.warning("CIF file not found: %s", file_path)
             return []
 
-        # Detect Git LFS pointer files (not the real CIF data)
-        with open(path, "r", encoding="utf-8", errors="replace") as _f:
-            first_line = _f.readline().rstrip()
-        if first_line.startswith("version https://git-lfs.github.com"):
-            logger.error(
-                "CIF file '%s' is a Git LFS pointer, not the actual timetable data. "
-                "Run 'git lfs pull' to download the real file.",
-                file_path,
-            )
-            return []
+        is_gz = str(path).lower().endswith(".gz")
 
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            self.parse_lines(f, source=file_path)
+        if not is_gz:
+            # Detect Git LFS pointer files (only applicable to plain text files)
+            with open(path, "r", encoding="utf-8", errors="replace") as _f:
+                first_line = _f.readline().rstrip()
+            if first_line.startswith("version https://git-lfs.github.com"):
+                logger.error(
+                    "CIF file '%s' is a Git LFS pointer, not the actual timetable data. "
+                    "Run 'git lfs pull' to download the real file.",
+                    file_path,
+                )
+                return []
+
+        opener = (
+            (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace"))
+            if is_gz
+            else (lambda p: open(p, "r", encoding="utf-8", errors="replace"))
+        )
+
+        try:
+            with opener(path) as f:
+                self.parse_lines(f, source=file_path)
+        except Exception as exc:
+            logger.error("Failed to parse CIF file %s: %s", file_path, exc)
+            return []
 
         return self._schedules
 
     def parse_directory(self, dir_path: str) -> list[CIFSchedule]:
-        """Parse all .mca and .cif files in a directory."""
+        """Parse all .mca and .cif files in a directory (including .gz variants)."""
         path = Path(dir_path)
         if not path.is_dir():
             logger.warning("CIF directory not found: %s", dir_path)
             return []
 
         all_schedules: list[CIFSchedule] = []
-        for ext in ("*.mca", "*.MCA", "*.cif", "*.CIF"):
+        for ext in ("*.mca", "*.MCA", "*.cif", "*.CIF",
+                    "*.cif.gz", "*.CIF.gz", "*.mca.gz", "*.MCA.gz"):
             for f in sorted(path.glob(ext)):
                 schedules = self.parse_file(str(f))
                 all_schedules.extend(schedules)

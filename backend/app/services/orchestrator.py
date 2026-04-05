@@ -290,17 +290,21 @@ class Orchestrator:
 
                 stop_type = get_stop_type_at_station(schedule, all_tiplocs) or "stop"
 
+                origin = schedule.origin
+                origin_dep = (origin.scheduled_departure or "") if origin else ""
+
                 result.timetable_rows.append(TimetableRow(
                     date=d.isoformat(),
                     departure_time=dep_formatted,
                     route_variant=variant_name,
+                    train_uid=schedule.train_uid,
+                    origin_departure=origin_dep,
                     stop_type=stop_type,
                     train_class=train_class,
                     number_of_coaches=coaches,
                 ))
 
-                # Debug row
-                origin = schedule.origin
+                # Debug row (origin already assigned above)
                 result.debug_rows.append(DebugRow(
                     service_date=d.isoformat(),
                     train_uid=schedule.train_uid,

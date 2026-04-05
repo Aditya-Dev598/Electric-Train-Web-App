@@ -149,8 +149,10 @@ class DarwinMatch:
 class TimetableRow:
     """A single row in the timetable CSV output."""
     date: str            # YYYY-MM-DD
-    departure_time: str  # HH:MM:SS
+    departure_time: str  # HH:MM:SS at the queried station
     route_variant: str   # auto-generated "Origin - Destination" key into route table
+    train_uid: str = ""          # CIF train UID (BS record cols 3-8), e.g. "W12345"
+    origin_departure: str = ""   # LO scheduled_departure, e.g. "07550" — fixed across stations
     stop_type: str = "stop"          # "stop" = calls here, "pass" = passes through
     train_class: str = ""            # empty string if unavailable
     number_of_coaches: Optional[int] = None  # None → blank in CSV
