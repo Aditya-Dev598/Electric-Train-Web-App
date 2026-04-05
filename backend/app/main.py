@@ -85,8 +85,22 @@ def create_app() -> FastAPI:
         logger.info("Mileage data loaded successfully")
     except Exception as exc:
         logger.warning("Failed to load mileage data: %s", exc)
-    # Wire up TIPLOC→CRS resolver so the coordinate fallback can look up station coords
-    mileage.set_crs_lookup(corpus.tiploc_to_crs)
+    # Wire up TIPLOC→CRS resolver so the coordinate fallback can look up station coords.
+    # Falls back to 4-char prefix variants for TIPLOCs that have no direct CRS in CORPUS
+    # (e.g. WATRLMN, WATRLOW have no CRS but share prefix WATR with WATRLOO → WAT).
+    def _tiploc_to_crs_with_variants(tiploc: str):
+        crs = corpus.tiploc_to_crs(tiploc)
+        if crs and not crs.startswith(("Z", "X")):
+            return crs
+        # Try prefix variants (e.g. WATRLMN → WATRLOO → WAT)
+        # Skip Z-codes (LU/non-NR) and X-codes (internal/freight)
+        for variant in corpus.tiploc_variants(tiploc):
+            crs = corpus.tiploc_to_crs(variant)
+            if crs and not crs.startswith(("Z", "X")):
+                return crs
+        return None
+
+    mileage.set_crs_lookup(_tiploc_to_crs_with_variants)
 
     darwin = DarwinEnricher(
         api_url=settings.darwin_api_url,
