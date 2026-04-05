@@ -86,19 +86,33 @@ def create_app() -> FastAPI:
     except Exception as exc:
         logger.warning("Failed to load mileage data: %s", exc)
     # Wire up TIPLOC→CRS resolver so the coordinate fallback can look up station coords.
-    # Falls back to 4-char prefix variants for TIPLOCs that have no direct CRS in CORPUS
-    # (e.g. WATRLMN, WATRLOW have no CRS but share prefix WATR with WATRLOO → WAT).
+    # Pre-load the bundled coordinate file so the lookup can prefer variants whose CRS
+    # is actually present in the database (e.g. CRDFCEN→CDF over CRDFBUS→CCB).
+    mileage._coord_fallback.load()
+    _known_coords: set = set(mileage._coord_fallback._coords.keys())
+
     def _tiploc_to_crs_with_variants(tiploc: str):
+        """Resolve TIPLOC → CRS, preferring variants that have coordinate data.
+
+        Resolution order:
+        1. Direct TIPLOC→CRS from CORPUS (skip Z/X internal codes)
+        2. Iterate 4-char prefix variants (WATRLMN→WATRLOO→WAT), prefer the
+           variant whose CRS exists in the coordinate database; fall back to
+           the first valid CRS found if none has coordinates.
+        """
         crs = corpus.tiploc_to_crs(tiploc)
         if crs and not crs.startswith(("Z", "X")):
             return crs
-        # Try prefix variants (e.g. WATRLMN → WATRLOO → WAT)
-        # Skip Z-codes (LU/non-NR) and X-codes (internal/freight)
+        # Try prefix variants — collect first valid CRS and first with known coords
+        first_valid: str | None = None
         for variant in corpus.tiploc_variants(tiploc):
             crs = corpus.tiploc_to_crs(variant)
             if crs and not crs.startswith(("Z", "X")):
-                return crs
-        return None
+                if not first_valid:
+                    first_valid = crs
+                if crs.upper() in _known_coords:
+                    return crs  # best match: variant is in the coordinate DB
+        return first_valid  # fallback: first valid CRS even if not in DB
 
     mileage.set_crs_lookup(_tiploc_to_crs_with_variants)
 
