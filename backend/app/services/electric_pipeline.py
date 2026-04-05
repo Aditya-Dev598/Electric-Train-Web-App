@@ -433,7 +433,12 @@ def run_pipeline(
 
 
 def combine_csvs(csv_texts: list[str]) -> str:
-    """Combine multiple timetable CSV texts, removing exact duplicate rows."""
+    """Combine multiple timetable CSV texts, deduplicating on logical key.
+
+    Two rows are considered duplicates when (date, departure_time, route_variant)
+    match.  Among duplicates the row with the most non-empty fields is kept,
+    so train_class / coaches from Darwin enrichment are preserved when present.
+    """
     frames = [
         pd.read_csv(io.StringIO(t.lstrip("\ufeff")))
         for t in csv_texts if t.strip()
@@ -441,7 +446,24 @@ def combine_csvs(csv_texts: list[str]) -> str:
     if not frames:
         return ""
     combined = pd.concat(frames, ignore_index=True)
-    combined = combined.drop_duplicates()
+
+    key_cols = ["date", "departure_time", "route_variant"]
+    # Only deduplicate on key cols if they all exist; otherwise fall back to exact match
+    if all(c in combined.columns for c in key_cols):
+        # Score each row by number of non-empty / non-null fields (higher = more data)
+        combined["_score"] = combined.apply(
+            lambda r: sum(1 for v in r if v is not None and str(v).strip() not in ("", "nan")),
+            axis=1,
+        )
+        combined = (
+            combined
+            .sort_values("_score", ascending=False)
+            .drop_duplicates(subset=key_cols, keep="first")
+            .drop(columns=["_score"])
+        )
+    else:
+        combined = combined.drop_duplicates()
+
     buf = io.StringIO()
     combined.to_csv(buf, index=False)
     return buf.getvalue()

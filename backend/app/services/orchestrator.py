@@ -247,12 +247,18 @@ class Orchestrator:
         departures_found = 0
         darwin_success = 0
         darwin_attempts = 0
+        _seen_timetable_rows: set = set()  # (date, dep_time, train_uid) dedup guard
 
         for d, effective in all_effective_schedules:
             for schedule in effective:
                 dep_time_raw = get_departure_at_station(schedule, all_tiplocs)
                 if not dep_time_raw:
                     continue
+
+                row_key = (d.isoformat(), dep_time_raw, schedule.train_uid)
+                if row_key in _seen_timetable_rows:
+                    continue
+                _seen_timetable_rows.add(row_key)
 
                 departures_found += 1
                 dep_minutes = parse_cif_time(dep_time_raw)
