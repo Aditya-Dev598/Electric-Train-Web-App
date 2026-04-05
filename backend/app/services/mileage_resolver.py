@@ -38,7 +38,9 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 # Bundled static coordinate file (ships with the repo; used when cache is absent)
-BUNDLED_COORDS_PATH = Path(__file__).parent.parent.parent.parent / "data" / "mileage" / "uk_station_coords.json"
+# __file__ = .../backend/app/services/mileage_resolver.py
+# .parent x3  = .../backend
+BUNDLED_COORDS_PATH = Path(__file__).parent.parent.parent / "data" / "mileage" / "uk_station_coords.json"
 
 # Empirical factor: UK rail distance ≈ straight-line × 1.15
 _RAIL_FACTOR = 1.15
