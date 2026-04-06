@@ -13,3 +13,4 @@ output/
 .pytest_cache/
 # Runtime generation results (contain user data, not source code)
 backend/data/results/*/
+backend/data/electric/runs/*/

@@ -463,18 +463,31 @@ The Electric Pipeline calculates the half-hourly energy demand at each traction 
 
 **Before running, you need:**
 
-1. **Rolling Stock CSV** — contains energy parameters per train type. Columns:
-   - `train_type` — must match the value in your timetable's `train_type` column
-   - `mass_t` — train mass in tonnes
-   - `length_m` — train length in metres
-   - `drive_eff` — drive system efficiency (0–1)
-   - `regen_eff` — regenerative braking efficiency (0–1)
-   - `aux_kw` — auxiliary power draw in kW
-   - `max_speed_mph` — maximum speed
+1. **Rolling Stock CSV** — energy parameters per train type. Required columns:
 
-2. **Station Points CSV** — maps each station (CRS code) to a TSS name. Columns:
-   - `crs` — 3-letter station code
-   - `tss` — name of the traction substation serving that station
+   | Column | Meaning | Example |
+   |--------|---------|---------|
+   | `train_type` | Must match the value in your timetable's `train_type` column | `CAF_URBOS_3` |
+   | `kwh_per_km_per_car` | Electrical energy per km per car (kWh) | `0.7` |
+   | `aux_kw_per_car` | Auxiliary power per car (heating, lighting, AC) in kW | `6` |
+   | `drive_eff` | Drivetrain efficiency 0–1 (default 0.9) | `0.9` |
+   | `regen_eff` | Regenerative braking recovery 0–1 (default 0) | `0.25` |
+   | `line_losses_pct` | Transmission losses as a fraction (e.g. 0.05 = 5%) | `0.05` |
+
+   Example row:
+   ```
+   train_type,kwh_per_km_per_car,aux_kw_per_car,drive_eff,regen_eff,line_losses_pct
+   CAF_URBOS_3,0.7,6,0.9,0.25,0.05
+   ```
+
+   > **Regen note:** `regen_eff` uses a stop-based model — kinetic energy is recovered at every station stop regardless of gradient. A value of 0.25 reduces traction draw by ~18% on a typical metro/tram route.
+
+2. **Station Points CSV** — maps each station name to a TSS. Required columns:
+
+   | Column | Meaning | Example |
+   |--------|---------|---------|
+   | `Station` | Station name (must match the `from_station`/`to_station` values in your route CSV, case-insensitive) | `WOLVERHAMPTON_STATION` |
+   | `TSS` | Name of the traction substation serving that station | `BILSTON_ROAD_(TSS_2)` |
 
 **Steps:**
 1. Upload Rolling Stock and Station Points CSVs using the upload buttons in the **Electric Pipeline** panel
@@ -532,11 +545,11 @@ The Solar Pipeline models how much of the electric demand from Step 5 could be m
 | `date` | The date of the service (YYYY-MM-DD) |
 | `departure_time` | Time the train departs the station you searched (HH:MM:SS) |
 | `route_variant` | Identifies the stopping pattern of this service |
+| `train_uid` | CIF train UID — uniquely identifies the schedule (e.g. `W12345`) |
+| `origin_departure` | Departure time from the service's origin station (used for merge deduplication) |
 | `stop_type` | `stop` = train calls here; `pass` = train passes through without stopping |
-| `train_class` | First / Standard (from Darwin — blank if not available) |
-| `number_of_coaches` | How many coaches the train has (from Darwin — blank if not available) |
-| `train_type` | Train type for Electric Pipeline — **fill this in manually before running Electric** |
-| `cars` | Number of cars for Electric Pipeline — **fill this in manually before running Electric** |
+| `train_class` | First / Standard (from CIF or Darwin — blank if neither has the data) |
+| `number_of_coaches` | How many coaches the train has (from CIF or Darwin — blank if unavailable) |
 
 ### Route CSV
 
@@ -556,12 +569,16 @@ The Solar Pipeline models how much of the electric demand from Step 5 could be m
 
 ### Electric TSS CSV (per substation)
 
+One file per Traction Sub-Station (TSS), one row per day.
+
 | Column | Meaning |
 |--------|---------|
-| `date` | Date in DD/MM/YYYY format |
-| `dep_time` | Departure time HH:MM |
-| `0:30` … `0:00` | Energy consumed in that half-hour bin (kWh) |
-| `Total Units` | Sum of all 48 half-hour bins for this service (kWh) |
+| `Date` | Date in DD/MM/YYYY format |
+| `Day` | Day of week (e.g. `Saturday`) |
+| `Total Units` | Total kWh demand at this TSS for the day |
+| `0:30` … `0:00` | kWh consumed in each 30-minute window (48 columns covering a full 24-hour day) |
+
+The last bin is labelled `0:00` (midnight wrap, i.e. 23:30–00:00).
 
 ---
 
@@ -604,8 +621,8 @@ When you are finished, go back to each terminal/command prompt window and press 
 
 **Electric Pipeline returns no TSS files**
 - Make sure Rolling Stock and Station Points CSVs are uploaded (green ticks in the Electric panel)
-- Make sure `train_type` and `cars` are filled in the timetable editor (they are blank by default)
-- Check that your Station Points CSV has CRS codes that match stations in your route CSV
+- Make sure `train_type` and `cars` are filled in the timetable editor (they are blank by default — use the in-browser editor or fill them before uploading)
+- Check that station names in your Station Points CSV (`Station` column) match the `from_station`/`to_station` values in your route CSV — the app reports unmatched stations in a debug CSV
 
 **Solar pipeline chart is blank or metrics show 0%**
 - Make sure the PVGIS CSV was downloaded from the PVGIS hourly data tool (not monthly averages)
@@ -639,44 +656,45 @@ Electric-Train-Web-App/
 │   │   ├── config.py                  # Settings (env vars, data paths)
 │   │   ├── routers/
 │   │   │   ├── cif.py                 # POST /api/cif/upload, GET /api/cif/status
-│   │   │   ├── timetable.py           # Generate, download, list, delete, edit CSVs
+│   │   │   ├── timetable.py           # Generate, download, list, delete, edit, merge CSVs
 │   │   │   ├── electric.py            # Upload reference files, run energy pipeline
 │   │   │   ├── solar.py               # Run solar analysis
 │   │   │   └── health.py              # GET /api/health
 │   │   ├── services/
 │   │   │   ├── orchestrator.py        # Main timetable generation logic
-│   │   │   ├── cif_parser.py          # Network Rail CIF file parser
+│   │   │   ├── cif_parser.py          # Network Rail CIF/MCA parser (supports .gz)
 │   │   │   ├── corpus_mapper.py       # CORPUS station data mapper
 │   │   │   ├── mileage_resolver.py    # NESA mileage lookup + OSM coordinate fallback + elevation
 │   │   │   ├── cif_formation.py       # CIF BS record → train_class and coach count lookup
 │   │   │   ├── darwin_enricher.py     # Darwin API enrichment (headcode+time matching)
-│   │   │   ├── result_store.py        # Persistent result storage (Phase 2)
-│   │   │   ├── electric_pipeline.py   # Half-hourly TSS energy model (Phase 4)
-│   │   │   └── solar_pipeline.py      # Solar supply vs. demand model (Phase 5)
+│   │   │   ├── result_store.py        # Persistent result storage
+│   │   │   ├── electric_pipeline.py   # Half-hourly TSS energy model (stop-based regen)
+│   │   │   └── solar_pipeline.py      # Solar supply vs. demand model
 │   │   └── security/
 │   │       └── middleware.py          # Rate limiting, size limits, security headers
 │   ├── tests/
 │   │   ├── unit/                      # Unit tests for individual services
 │   │   ├── integration/               # Integration tests
 │   │   └── e2e/
-│   │       └── test_full_pipeline.py  # End-to-end tests (31 tests, no network)
+│   │       └── test_full_pipeline.py  # End-to-end tests (177 tests, no network)
 │   ├── data/
-│   │   ├── cif/                       # CIF timetable files (uploaded or pre-placed)
+│   │   ├── cif/                       # CIF timetable files (uploaded or pre-placed; .gz supported)
 │   │   ├── corpus/                    # CORPUSExtract.json
-│   │   ├── mileage/                   # mileage.json
-│   │   ├── electric/                  # rolling_stock_energy.csv, station_points.csv
-│   │   ├── results/                   # Persistent generated results (auto-created)
-│   │   └── solar/                     # Solar pipeline outputs (auto-created)
+│   │   ├── mileage/                   # mileage.json (optional official distances)
+│   │   ├── electric/                  # rolling_stock.csv, station_points.csv, route.csv, timetable.csv
+│   │   ├── results/                   # Persistent generated results (auto-created, gitignored)
+│   │   └── sample/                    # Sample timetable and route CSVs for testing
 │   ├── requirements.txt               # Python dependencies
 │   └── .env.example                   # Configuration template
 ├── src/
 │   ├── app/
 │   │   └── page.tsx                   # Main UI (all panels)
 │   ├── components/
-│   │   └── CsvEditor.tsx              # In-browser Excel-like CSV editor (Phase 3)
+│   │   └── CsvEditor.tsx              # In-browser Excel-like CSV editor
 │   └── lib/
 │       └── api.ts                     # TypeScript API client
-├── package.json                       # Node.js dependencies (includes react-data-grid)
+├── validate_pipeline.py               # Electric pipeline parameter sensitivity tests (developer tool)
+├── package.json                       # Node.js dependencies
 └── pyproject.toml                     # Python test configuration
 ```
 
