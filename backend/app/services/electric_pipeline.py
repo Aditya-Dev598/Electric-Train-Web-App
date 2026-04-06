@@ -15,6 +15,18 @@ Adapted from run_pipeline_tss_assigned.py (Aditya-Dev598/Electric-Train) with fi
   Bug 4 (Low):    BIN_LABELS last entry "24:00:00" inconsistent with "H:MM" format
                   (e.g. "0:30", "1:00" … "23:30"). Standardised to "0:00" (midnight wrap).
 
+  Bug 5 (Critical): regen_eff was a silent no-op — the conditional required a
+                  "gradient_percent" column in the route CSV, which is absent in
+                  production data. Fixed: stop-based regen now fires at every segment
+                  (urban trams recover kinetic energy at each braking event regardless
+                  of gradient). gradient_percent remains supported as an optional bonus.
+
+Parameter semantics note:
+  kwh_per_km_per_car is treated as MECHANICAL (wheel-level) energy per km per car.
+  The formula divides by drive_eff to obtain wall-socket (grid) demand.
+  If your source reports ELECTRICAL (pantograph) consumption, set drive_eff=1.0 or
+  adjust kwh_per_km_per_car = electrical_value * drive_eff before loading.
+
 Format transform applied internally (scraper → Electric script column names):
   departure_time HH:MM:SS → dep_time HH:MM
   date YYYY-MM-DD         → date DD/MM/YYYY
@@ -250,15 +262,19 @@ def _expand_services(
                 cur_dt += timedelta(minutes=run_min + dwell_min)
                 continue
 
-            # Bug 2 fix: apply drive_eff to traction energy
+            # Stop-based regenerative braking: applies at every segment for urban tram
+            # (kinetic energy recovered at each station stop, regardless of gradient).
+            # regen_eff=0 → no recovery; regen_eff=0.25 → 25% of gross energy returned.
             run_kwh_gross = dist_km * kwh_per_km_per_car * cars
-            run_kwh_traction = run_kwh_gross / max(drive_eff, 1e-6)  # wall-socket kWh
+            regen_frac = max(0.0, min(0.9, regen_eff))
+            run_kwh_traction = run_kwh_gross * (1.0 - regen_frac) / max(drive_eff, 1e-6)
 
-            # Regen on downhill gradient (Bug 2: now uses per-train regen_eff)
+            # Optional gradient bonus: extra regen on downhill segments (additive)
             if "gradient_percent" in seg.index:
                 g = pd.to_numeric(seg["gradient_percent"], errors="coerce")
                 if pd.notna(g) and g < 0:
-                    run_kwh_traction *= 1.0 - max(0.0, min(0.9, regen_eff))
+                    gradient_bonus = min(0.9 - regen_frac, abs(g) / 100.0)
+                    run_kwh_traction *= (1.0 - gradient_bonus)
 
             aux_kwh_run = aux_kw_per_car * cars * (run_min / 60.0)
             aux_kwh_dwell = aux_kw_per_car * cars * (dwell_min / 60.0)
