@@ -111,8 +111,17 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     # departure_time HH:MM:SS → dep_time HH:MM
+    # Handles both zero-padded ("08:30:00") and single-digit-hour ("8:30:00") formats.
     if "departure_time" in df.columns and "dep_time" not in df.columns:
-        df["dep_time"] = df["departure_time"].astype(str).str[:5]
+        def _norm_time(s: str) -> str:
+            parts = str(s).strip().split(":")
+            if len(parts) >= 2:
+                try:
+                    return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+                except ValueError:
+                    pass
+            return str(s).strip()[:5]
+        df["dep_time"] = df["departure_time"].map(_norm_time)
 
     # date YYYY-MM-DD → DD/MM/YYYY
     if "date" in df.columns:
@@ -204,6 +213,9 @@ def _expand_services(
 
         # Lookup energy params for this train type
         params = ep.loc[train_type] if train_type in ep.index else None
+        if isinstance(params, pd.DataFrame):
+            # Duplicate train_type rows in rolling_stock CSV — use the first one
+            params = params.iloc[0]
         kwh_per_km_per_car = float(params["kwh_per_km_per_car"]) if params is not None else 2.0
         aux_kw_per_car = float(params["aux_kw_per_car"]) if params is not None else 10.0
         line_losses_pct = float(params.get("line_losses_pct", 0.0)) if params is not None else 0.0

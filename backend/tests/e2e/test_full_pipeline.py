@@ -338,6 +338,92 @@ class TestDwellLogic:
         assert abs(dwell_events[0]["kwh"] - expected_kwh) < 1e-6
 
 
+class TestTimeNormalization:
+    """_transform_timetable handles both zero-padded and single-digit-hour times."""
+
+    def _transform(self, dep_time: str) -> str:
+        from backend.app.services.electric_pipeline import _transform_timetable
+        import pandas as pd
+        df = pd.DataFrame([{"departure_time": dep_time, "route_variant": "R1",
+                            "date": "15/01/2025", "train_type": "T", "cars": 4}])
+        out = _transform_timetable(df)
+        return str(out.iloc[0]["dep_time"])
+
+    def test_single_digit_hour_normalised(self):
+        """'9:41:00' → '09:41' (not '9:41:' which would break strptime)."""
+        assert self._transform("9:41:00") == "09:41"
+
+    def test_zero_padded_hour_unchanged(self):
+        """'08:00:00' → '08:00'."""
+        assert self._transform("08:00:00") == "08:00"
+
+    def test_midnight_normalised(self):
+        """'0:01:00' → '00:01'."""
+        assert self._transform("0:01:00") == "00:01"
+
+    def test_already_hhmm_format_unchanged(self):
+        """'23:58' (no seconds) → '23:58'."""
+        assert self._transform("23:58") == "23:58"
+
+    def test_late_night_hour_normalised(self):
+        """'9:00:00' → '09:00' (edge of single-digit range)."""
+        assert self._transform("9:00:00") == "09:00"
+
+
+class TestRollingStockDuplicates:
+    """Pipeline is resilient to duplicate train_type rows in rolling_stock CSV."""
+
+    def _make_inputs(self, tmp_path, rolling_stock_csv: str):
+        rs_path = tmp_path / "rs.csv"
+        rs_path.write_text(rolling_stock_csv)
+        sp_path = tmp_path / "sp.csv"
+        sp_path.write_text("Station,TSS\nA,TSS1\nB,TSS1\n")
+        timetable_csv = textwrap.dedent("""\
+            route_variant,dep_time,date,train_type,cars
+            R1,08:00,15/01/2025,450,4
+        """)
+        route_csv = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,distance,run_min,wait_min
+            R1,1,A,B,1.0,3,1.0
+        """)
+        return timetable_csv, route_csv, rs_path, sp_path
+
+    def test_duplicate_train_type_does_not_crash(self, tmp_path):
+        """Pipeline should not raise when rolling_stock has duplicate train_type."""
+        from backend.app.services.electric_pipeline import run_pipeline
+        rs_csv = textwrap.dedent("""\
+            train_type,kwh_per_km_per_car,aux_kw_per_car,drive_eff,regen_eff,line_losses_pct
+            450,2.6,8.5,0.88,0.20,0.08
+            450,2.6,8.5,0.88,0.20,0.08
+        """)
+        tt, rt, rs_path, sp_path = self._make_inputs(tmp_path, rs_csv)
+        result, _debug = run_pipeline(tt, rt, rs_path, sp_path)
+        assert isinstance(result, dict)
+
+    def test_duplicate_uses_first_row_params(self, tmp_path):
+        """When train_type is duplicated with different values, the first row is used."""
+        from backend.app.services.electric_pipeline import run_pipeline
+        # Two rows: first has 2.0 kWh, second has 99.0 kWh (should be ignored)
+        rs_csv = textwrap.dedent("""\
+            train_type,kwh_per_km_per_car,aux_kw_per_car,drive_eff,regen_eff,line_losses_pct
+            450,2.0,8.5,1.0,0.0,0.0
+            450,99.0,8.5,1.0,0.0,0.0
+        """)
+        tt, rt, rs_path, sp_path = self._make_inputs(tmp_path, rs_csv)
+        result, _debug = run_pipeline(tt, rt, rs_path, sp_path)
+        # Collect total kWh across all TSS outputs
+        total_kwh = 0.0
+        for csv_str in result.values():
+            df = pd.read_csv(io.StringIO(csv_str))
+            if "Total Units" in df.columns:
+                total_kwh += df["Total Units"].sum()
+        # With kwh_per_km_per_car=2.0, dist=1km, cars=4: traction = 2.0*1*4 = 8 kWh/service
+        # If it used 99.0 it would be 396 kWh — assert we're clearly NOT in that range
+        assert total_kwh < 50.0, (
+            f"total_kwh={total_kwh:.1f} suggests wrong row was used (expected ~8 kWh)"
+        )
+
+
 class TestElectricTransform:
     """format transform: scraper columns → pipeline columns."""
 
