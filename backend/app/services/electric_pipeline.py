@@ -247,8 +247,22 @@ def _expand_services(
 
             dist_km = _dist_mi * 1.609344
             run_min = _run_min
-            # Bug 1 fix: use wait_min instead of dwell_time
-            dwell_min = float(seg.get("wait_min", 0.0) or 0.0)
+
+            # Dwell logic: pass-through stations have zero dwell;
+            # stops with blank/zero wait_min default to 0.5 min.
+            raw_stop_type = str(seg.get("stop_type", "stop")).strip().lower() \
+                if "stop_type" in seg.index else "stop"
+
+            if raw_stop_type == "pass":
+                dwell_min = 0.0
+            else:
+                raw_wait = seg.get("wait_min", None)
+                try:
+                    dwell_min = float(raw_wait)
+                    if dwell_min != dwell_min or dwell_min <= 0:  # NaN or zero/negative
+                        dwell_min = 0.5
+                except (TypeError, ValueError):
+                    dwell_min = 0.5
 
             from_tss = tss_map.get(from_st)
             to_tss = tss_map.get(to_st)

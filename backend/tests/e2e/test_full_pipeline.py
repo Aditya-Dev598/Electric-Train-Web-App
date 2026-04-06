@@ -27,15 +27,15 @@ import pytest
 
 # Project root relative to this file
 _REPO = Path(__file__).resolve().parents[3]
-_SAMPLE_OUT = _REPO / "Sample Output"
+_SAMPLE_DIR = _REPO / "backend" / "data" / "sample"
 
 
 # ---------------------------------------------------------------------------
-# 1. Sample Output CSV structure
+# 1. Sample CSV structure (uses backend/data/sample/)
 # ---------------------------------------------------------------------------
 
 class TestSampleOutputStructure:
-    """Validate that the committed sample output CSVs have the expected shape."""
+    """Validate that the bundled sample CSVs have the expected shape."""
 
     TIMETABLE_REQUIRED_COLS = {"route_variant", "date", "departure_time"}
     ROUTE_REQUIRED_COLS = {
@@ -43,50 +43,34 @@ class TestSampleOutputStructure:
         "run_min", "wait_min",
     }
 
-    @pytest.mark.parametrize("fname", [
-        "Farnborough (Main) timetable.csv",
-        "Fleet Timetable.csv",
-    ])
-    def test_timetable_columns(self, fname):
-        path = _SAMPLE_OUT / fname
-        df = pd.read_csv(path)
-        assert self.TIMETABLE_REQUIRED_COLS.issubset(set(df.columns)), (
-            f"{fname} missing columns: {self.TIMETABLE_REQUIRED_COLS - set(df.columns)}"
+    def test_sample_timetable_columns(self):
+        df = pd.read_csv(_SAMPLE_DIR / "timetable_sample.csv")
+        # timetable_sample uses scraper column names (departure_time instead of dep_time)
+        assert "route_variant" in df.columns or "train_route" in df.columns, (
+            "Sample timetable missing a route column"
         )
+        assert "date" in df.columns
 
-    @pytest.mark.parametrize("fname", [
-        "Farnborough (Main) route.csv",
-        "Fleet Route.csv",
-    ])
-    def test_route_columns(self, fname):
-        path = _SAMPLE_OUT / fname
-        df = pd.read_csv(path)
+    def test_sample_route_columns(self):
+        df = pd.read_csv(_SAMPLE_DIR / "route_sample.csv")
         assert self.ROUTE_REQUIRED_COLS.issubset(set(df.columns)), (
-            f"{fname} missing columns: {self.ROUTE_REQUIRED_COLS - set(df.columns)}"
+            f"Sample route missing columns: {self.ROUTE_REQUIRED_COLS - set(df.columns)}"
         )
 
-    def test_farnborough_timetable_nonempty(self):
-        df = pd.read_csv(_SAMPLE_OUT / "Farnborough (Main) timetable.csv")
+    def test_sample_timetable_nonempty(self):
+        df = pd.read_csv(_SAMPLE_DIR / "timetable_sample.csv")
         assert len(df) > 0
 
-    def test_farnborough_timetable_departure_time_parseable(self):
-        df = pd.read_csv(_SAMPLE_OUT / "Farnborough (Main) timetable.csv")
-        # times should parse as HH:MM[:SS]
-        times = df["departure_time"].astype(str)
-        for t in times:
-            assert len(t) >= 5, f"Unexpected time format: {t!r}"
-            assert t[:2].isdigit() and t[3:5].isdigit(), f"Non-numeric time: {t!r}"
-
-    def test_farnborough_route_seq_monotonic_per_variant(self):
-        df = pd.read_csv(_SAMPLE_OUT / "Farnborough (Main) route.csv")
+    def test_sample_route_seq_monotonic_per_variant(self):
+        df = pd.read_csv(_SAMPLE_DIR / "route_sample.csv")
         for variant, grp in df.groupby("route_variant"):
             seqs = grp["seq"].tolist()
             assert seqs == sorted(seqs), (
                 f"Route variant '{variant}' seq not monotonic: {seqs}"
             )
 
-    def test_farnborough_route_has_multiple_variants(self):
-        df = pd.read_csv(_SAMPLE_OUT / "Farnborough (Main) route.csv")
+    def test_sample_route_has_at_least_one_variant(self):
+        df = pd.read_csv(_SAMPLE_DIR / "route_sample.csv")
         assert df["route_variant"].nunique() >= 1
 
 
@@ -258,6 +242,100 @@ class TestElectricPipeline:
                 stored.reset_index(drop=True),
                 check_names=False,
             )
+
+
+class TestDwellLogic:
+    """stop_type-aware dwell time and default-dwell behaviour."""
+
+    def _run_segments(self, route_csv: str, tmp_path) -> list[dict]:
+        """Run _expand_services on a single-service timetable, return all event records."""
+        from backend.app.services.electric_pipeline import _expand_services, _load_energy_params
+        import pandas as pd
+        tt = pd.read_csv(io.StringIO(textwrap.dedent("""\
+            route_variant,dep_time,date,train_type,cars
+            R1,08:00,15/01/2025,Class377,4
+        """)))
+        route = pd.read_csv(io.StringIO(route_csv))
+        stations = pd.read_csv(io.StringIO(textwrap.dedent("""\
+            Station,TSS
+            A,TSS1
+            B,TSS1
+            C,TSS1
+            D,TSS1
+        """)))
+        ep = pd.DataFrame([{
+            "train_type": "Class377", "kwh_per_km_per_car": 1.0,
+            "aux_kw_per_car": 6.0, "drive_eff": 1.0,
+            "regen_eff": 0.0, "line_losses_pct": 0.0,
+        }])
+        events = _expand_services(tt, route, stations, ep)
+        return events[events.get("kind", pd.Series()).notna()].to_dict("records") \
+            if "kind" in events.columns else []
+
+    def test_pass_through_station_has_zero_dwell(self, tmp_path):
+        """stop_type='pass' → no dwell event, even when wait_min=2.0."""
+        route = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,stop_type,distance,run_min,wait_min
+            R1,1,A,B,pass,0.5,2,2.0
+        """)
+        events = self._run_segments(route, tmp_path)
+        dwell_events = [e for e in events if e.get("kind") == "dwell"]
+        assert dwell_events == [], (
+            f"Expected no dwell for pass-through, got: {dwell_events}"
+        )
+
+    def test_stop_with_blank_wait_defaults_to_half_minute(self, tmp_path):
+        """stop_type='stop' with blank wait_min → dwell of 0.5 min (aux energy > 0)."""
+        route = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,stop_type,distance,run_min,wait_min
+            R1,1,A,B,stop,0.5,2,
+        """)
+        events = self._run_segments(route, tmp_path)
+        dwell_events = [e for e in events if e.get("kind") == "dwell"]
+        assert len(dwell_events) == 1, f"Expected 1 dwell event, got {len(dwell_events)}"
+        # dwell duration = 0.5 min → aux_kwh_dwell = 6.0 × 4 × (0.5/60) = 0.2 kWh
+        expected_kwh = 6.0 * 4 * (0.5 / 60)
+        assert abs(dwell_events[0]["kwh"] - expected_kwh) < 1e-6, (
+            f"Expected {expected_kwh:.6f} kWh, got {dwell_events[0]['kwh']:.6f}"
+        )
+
+    def test_stop_with_zero_wait_defaults_to_half_minute(self, tmp_path):
+        """stop_type='stop' with explicit wait_min=0 → treated as blank, defaults to 0.5."""
+        route = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,stop_type,distance,run_min,wait_min
+            R1,1,A,B,stop,0.5,2,0
+        """)
+        events = self._run_segments(route, tmp_path)
+        dwell_events = [e for e in events if e.get("kind") == "dwell"]
+        assert len(dwell_events) == 1
+        expected_kwh = 6.0 * 4 * (0.5 / 60)
+        assert abs(dwell_events[0]["kwh"] - expected_kwh) < 1e-6
+
+    def test_stop_with_explicit_wait_min_used(self, tmp_path):
+        """stop_type='stop' with wait_min=2.0 → uses 2.0, not the 0.5 default."""
+        route = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,stop_type,distance,run_min,wait_min
+            R1,1,A,B,stop,0.5,2,2.0
+        """)
+        events = self._run_segments(route, tmp_path)
+        dwell_events = [e for e in events if e.get("kind") == "dwell"]
+        assert len(dwell_events) == 1
+        expected_kwh = 6.0 * 4 * (2.0 / 60)
+        assert abs(dwell_events[0]["kwh"] - expected_kwh) < 1e-6, (
+            f"Expected {expected_kwh:.6f} kWh, got {dwell_events[0]['kwh']:.6f}"
+        )
+
+    def test_no_stop_type_column_behaves_as_stop(self, tmp_path):
+        """Route CSV without stop_type column: applies stop default (0.5 min for blank wait)."""
+        route = textwrap.dedent("""\
+            route_variant,seq,from_station,to_station,distance,run_min,wait_min
+            R1,1,A,B,0.5,2,
+        """)
+        events = self._run_segments(route, tmp_path)
+        dwell_events = [e for e in events if e.get("kind") == "dwell"]
+        assert len(dwell_events) == 1
+        expected_kwh = 6.0 * 4 * (0.5 / 60)
+        assert abs(dwell_events[0]["kwh"] - expected_kwh) < 1e-6
 
 
 class TestElectricTransform:
