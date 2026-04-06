@@ -1,0 +1,2 @@
+train_type,kwh_per_km_per_car,aux_kw_per_car,drive_eff,regen_eff,line_losses_pct
+450,2.6,8.5,0.88,0.2,0.08
