@@ -39,6 +39,7 @@ Format transform applied internally (scraper → Electric script column names):
 from __future__ import annotations
 
 import io
+import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -46,6 +47,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +81,16 @@ def _safe_name(s: str) -> str:
 
 
 def _parse_dt(date_str: str, time_str: str) -> datetime:
-    """Parse date DD/MM/YYYY and time HH:MM into a datetime."""
-    d = datetime.strptime(date_str.strip(), "%d/%m/%Y").date()
+    """Parse date (DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD) and time HH:MM into a datetime."""
     t = datetime.strptime(time_str.strip(), "%H:%M").time()
-    return datetime.combine(d, t)
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            d = datetime.strptime(date_str.strip(), fmt).date()
+            return datetime.combine(d, t)
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot parse date '{date_str}'")
+
 
 
 def _make_day_bin_edges(day: datetime) -> list[datetime]:
@@ -123,14 +132,16 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
             return str(s).strip()[:5]
         df["dep_time"] = df["departure_time"].map(_norm_time)
 
-    # date YYYY-MM-DD → DD/MM/YYYY
+    # date normalisation: YYYY-MM-DD and DD-MM-YYYY → DD/MM/YYYY
     if "date" in df.columns:
         def _reformat_date(v: str) -> str:
             v = str(v).strip()
-            try:
-                return datetime.strptime(v, "%Y-%m-%d").strftime("%d/%m/%Y")
-            except ValueError:
-                return v  # already in target format or unknown
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(v, fmt).strftime("%d/%m/%Y")
+                except ValueError:
+                    pass
+            return v  # already DD/MM/YYYY or unknown
         df["date"] = df["date"].map(_reformat_date)
 
     # distance_miles → distance
