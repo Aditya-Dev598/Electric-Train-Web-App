@@ -209,6 +209,11 @@ def _expand_services(
 
         segs = route[route["route_variant"].astype(str).str.strip() == rv].sort_values("seq")
         if segs.empty:
+            # Fallback: strip CIF STP suffix "(2)", "(3)" etc. and retry
+            base_rv = re.sub(r"\s*\(\d+\)$", "", rv).strip()
+            if base_rv != rv:
+                segs = route[route["route_variant"].astype(str).str.strip() == base_rv].sort_values("seq")
+        if segs.empty:
             continue
 
         # Lookup energy params for this train type
