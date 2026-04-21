@@ -81,11 +81,14 @@ def _safe_name(s: str) -> str:
 
 
 def _parse_dt(date_str: str, time_str: str) -> datetime:
-    """Parse date (DD/MM/YYYY, DD-MM-YYYY, or YYYY-MM-DD) and time HH:MM into a datetime."""
+    """Parse date (DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD, or YYYY-MM-DD HH:MM:SS) and time HH:MM into a datetime."""
     t = datetime.strptime(time_str.strip(), "%H:%M").time()
+    # Strip trailing timestamp suffix produced by pandas datetime serialisation
+    # e.g. "2026-04-05 00:00:00" → "2026-04-05"
+    ds = date_str.strip().split(" ")[0]
     for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
         try:
-            d = datetime.strptime(date_str.strip(), fmt).date()
+            d = datetime.strptime(ds, fmt).date()
             return datetime.combine(d, t)
         except ValueError:
             continue
@@ -135,7 +138,9 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
     # date normalisation: YYYY-MM-DD and DD-MM-YYYY → DD/MM/YYYY
     if "date" in df.columns:
         def _reformat_date(v: str) -> str:
-            v = str(v).strip()
+            # Strip trailing timestamp suffix produced by pandas datetime serialisation
+            # e.g. "2026-04-05 00:00:00" → "2026-04-05" before format matching.
+            v = str(v).strip().split(" ")[0]
             for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
                 try:
                     return datetime.strptime(v, fmt).strftime("%d/%m/%Y")
