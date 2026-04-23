@@ -431,7 +431,7 @@ async def put_timetable(gen_id: str, request: Request, rows: list[dict[str, Any]
     state = request.app.state
     if not state.result_store.exists(gen_id):
         raise HTTPException(status_code=404, detail="Result not found")
-    fieldnames = ["route_variant", "stop_type", "date", "departure_time", "train_class", "number_of_coaches"]
+    fieldnames = ["route_variant", "train_uid", "origin_departure", "stop_type", "date", "departure_time", "train_class", "number_of_coaches"]
     csv_text = _rows_to_csv(rows, fieldnames)
     state.result_store.write_csv(gen_id, "timetable", csv_text)
     _result_cache.pop(gen_id, None)  # invalidate memory cache

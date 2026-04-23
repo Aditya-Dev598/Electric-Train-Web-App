@@ -122,18 +122,27 @@ export default function CsvEditor({ resultId, csvType, onSaved }: CsvEditorProps
         throw new Error(d.detail || `Recalculate failed: ${resp.status}`);
       }
       const { rows: updated } = await resp.json();
-      // Count how many rows got distance and/or elevation filled in
-      const filled = (updated as Record<string, string>[]).filter(
-        r => r.distance_miles !== '' || r.avg_elevation_m !== ''
-      ).length;
-      setRows((updated as Record<string, string>[]).map((r, i) => ({
-        ...r,
-        _rowId: rows[i]?._rowId ?? String(i),
-      })));
+      // Normalise recalculated numeric values back to strings (backend returns
+      // floats for distance_miles / avg_elevation_m; keep grid data uniformly typed).
+      const normalised = (updated as Record<string, unknown>[]).map((r, i) => {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(r)) {
+          out[k] = v == null ? '' : String(v);
+        }
+        out['_rowId'] = rows[i]?._rowId ?? String(i);
+        return out as Row;
+      });
+      // Count rows where distance_miles or avg_elevation_m actually changed.
+      const filled = normalised.filter((r, i) => {
+        const orig = rows[i];
+        return r['distance_miles'] !== (orig?.['distance_miles'] ?? '') ||
+               r['avg_elevation_m'] !== (orig?.['avg_elevation_m'] ?? '');
+      }).length;
+      setRows(normalised);
       setRecalcMsg(
         filled > 0
           ? `Updated ${filled} row${filled !== 1 ? 's' : ''} — click Save Changes to persist`
-          : 'No distance/elevation data available (coordinate cache not yet loaded)',
+          : 'No distance/elevation data available (check coordinate cache or station names)',
       );
       setTimeout(() => setRecalcMsg(null), 6000);
     } catch (e) {
