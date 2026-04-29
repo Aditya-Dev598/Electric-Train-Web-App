@@ -31,6 +31,8 @@ _OUTPUT_FILES = {
     "avg_profile.xlsx",
     "avg_profile.png",
     "solar_metrics.xlsx",
+    "seasonal_chart.png",
+    "daytype_chart.png",
 }
 
 
@@ -65,6 +67,8 @@ async def run_solar(
     run_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
     avg_png_b64 = base64.b64encode(result.avg_profile_png).decode()
+    seasonal_b64 = base64.b64encode(result.seasonal_chart_png).decode()
+    daytype_b64 = base64.b64encode(result.daytype_chart_png).decode()
 
     outputs: dict[str, bytes] = {
         "demand_hourly.xlsx": result.demand_hourly_xlsx,
@@ -72,6 +76,8 @@ async def run_solar(
         "avg_profile.xlsx": result.avg_profile_xlsx,
         "avg_profile.png": result.avg_profile_png,
         "solar_metrics.xlsx": result.metrics_xlsx,
+        "seasonal_chart.png": result.seasonal_chart_png,
+        "daytype_chart.png": result.daytype_chart_png,
     }
 
     # Keep in memory
@@ -90,6 +96,8 @@ async def run_solar(
             "utilisation_pct": result.utilisation_pct,
             "files": list(outputs.keys()),
             "avg_profile_png_b64": avg_png_b64,
+            "seasonal_chart_png_b64": seasonal_b64,
+            "daytype_chart_png_b64": daytype_b64,
             "created_at": created_at,
         }),
         encoding="utf-8",
@@ -104,6 +112,8 @@ async def run_solar(
         "utilisation_pct": result.utilisation_pct,
         "files": list(outputs.keys()),
         "avg_profile_png_b64": avg_png_b64,
+        "seasonal_chart_png_b64": seasonal_b64,
+        "daytype_chart_png_b64": daytype_b64,
         "created_at": created_at,
     })
 

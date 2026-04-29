@@ -34,6 +34,8 @@ class SolarResult:
     metrics_xlsx: bytes         # solar_metrics_summary.xlsx (annual + seasonal)
     solar_share_pct: float      # annual solar share % (for API response)
     utilisation_pct: float      # annual utilisation % (for API response)
+    seasonal_chart_png: bytes   # bar chart: solar yield by 4 seasons
+    daytype_chart_png: bytes    # line chart: traction demand by day type
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +94,14 @@ def _ensure_24_hours(df: pd.DataFrame, who: str) -> list[str]:
     if missing:
         raise ValueError(f"{who}: missing hour columns after normalisation: {missing}")
     return hour_cols
+
+
+def _season_label(month: int) -> str:
+    """Four-season label used for the seasonal chart (does not affect metrics_xlsx)."""
+    if month in (12, 1, 2): return "Winter"
+    if month in (3, 4, 5):  return "Spring"
+    if month in (6, 7, 8):  return "Summer"
+    return "Autumn"
 
 
 def _season_from_month(month: int) -> str:
@@ -420,6 +430,83 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Chart generators (returned as PNG bytes alongside existing avg_profile_png)
+# ---------------------------------------------------------------------------
+
+def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
+    """Stacked bar chart: Used Solar + Spillage by Winter/Spring/Summer/Autumn."""
+    _, _, merged = compute_metrics(demand_df, supply_df)
+    hour_cols = [f"{h:02d}:00" for h in range(24)]
+    used_cols = [f"{c}_used" for c in hour_cols]
+    supply_cols = [f"{c}_supply" for c in hour_cols]
+
+    merged["_season4"] = merged["Date_dt"].dt.month.apply(_season_label)
+    season_order = ["Winter", "Spring", "Summer", "Autumn"]
+    used_vals, spill_vals = [], []
+    for s in season_order:
+        sub = merged[merged["_season4"] == s]
+        u = float(sub[used_cols].to_numpy().sum())
+        sp = float(sub[supply_cols].to_numpy().sum()) - u
+        used_vals.append(u)
+        spill_vals.append(max(sp, 0.0))
+
+    x = list(range(len(season_order)))
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.bar(x, used_vals, label="Used Solar", color="#ffd300")
+    ax.bar(x, spill_vals, bottom=used_vals, label="Spillage", color="#d4dae6")
+    ax.set_xticks(x)
+    ax.set_xticklabels(season_order)
+    ax.set_ylabel("Energy (same units as input)")
+    ax.set_title("Solar Yield by Season")
+    ax.legend()
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def build_daytype_demand_chart(demand_df: pd.DataFrame) -> bytes:
+    """Line chart: average hourly traction demand by Weekday / Saturday / Sunday."""
+    d_df = _normalize_hour_columns(demand_df.copy())
+    hour_cols = _ensure_24_hours(d_df, "DEMAND")
+    d_df["Date_dt"] = _parse_date_series(d_df["Date"])
+    dow = d_df["Date_dt"].dt.dayofweek  # 0=Mon … 6=Sun
+    d_df["_daytype"] = dow.apply(
+        lambda d: "Sunday" if d == 6 else ("Saturday" if d == 5 else "Weekday")
+    )
+    for c in hour_cols:
+        d_df[c] = pd.to_numeric(d_df[c], errors="coerce").fillna(0)
+
+    x = list(range(24))
+    fig, ax = plt.subplots(figsize=(12, 6))
+    colours = {"Weekday": "#e22a87", "Saturday": "#1e75bb", "Sunday": "#ffd300"}
+    for label, colour in colours.items():
+        sub = d_df[d_df["_daytype"] == label]
+        if sub.empty:
+            continue
+        means = [sub[c].mean() for c in hour_cols]
+        ax.plot(x, means, label=label, color=colour, linewidth=2.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(hour_cols, rotation=45, ha="right")
+    ax.set_xlabel("Hour")
+    ax.set_ylabel("Average Demand (same units as input)")
+    ax.set_title("Average Hourly Traction Demand by Day Type")
+    ax.legend()
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150)
+    plt.close(fig)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -450,6 +537,10 @@ def run_solar_pipeline(demand_csv: str, pvgis_csv: str) -> SolarResult:
     solar_share = float(annual["Solar Share (%)"].iloc[0])
     utilisation = float(annual["Utilisation (%)"].iloc[0])
 
+    # Step 5 — additional charts
+    seasonal_chart_png = build_seasonal_solar_chart(demand_hourly_df, pvgis_hourly_df)
+    daytype_chart_png = build_daytype_demand_chart(demand_hourly_df)
+
     return SolarResult(
         demand_hourly_xlsx=_df_to_xlsx_bytes(demand_hourly_df),
         pvgis_supply_xlsx=_df_to_xlsx_bytes(pvgis_hourly_df),
@@ -458,4 +549,6 @@ def run_solar_pipeline(demand_csv: str, pvgis_csv: str) -> SolarResult:
         metrics_xlsx=metrics_xlsx,
         solar_share_pct=round(solar_share, 2),
         utilisation_pct=round(utilisation, 2),
+        seasonal_chart_png=seasonal_chart_png,
+        daytype_chart_png=daytype_chart_png,
     )
