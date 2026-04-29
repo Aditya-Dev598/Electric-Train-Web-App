@@ -361,11 +361,16 @@ export default function Home() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="container">
-      <h1>UK Rail Timetable Generator</h1>
-      <p className="subtitle">
-        Generate timetable and route CSV outputs from official Network Rail CIF, CORPUS,
-        NESA mileage, and Darwin data sources.
-      </p>
+      <header className="rs-header">
+        <img src="/riding-sunbeams-logo.png" alt="Riding Sunbeams" />
+        <div className="rs-header-text">
+          <h1>Rail Timetable Generator</h1>
+          <p>
+            Generate timetable and route CSV outputs from official Network Rail CIF,
+            CORPUS, NESA mileage, and Darwin data sources.
+          </p>
+        </div>
+      </header>
 
       {/* ── CIF Status Bar ──────────────────────────────────────────────── */}
       <div className="card" style={{ padding: '1rem 1.5rem' }}>
