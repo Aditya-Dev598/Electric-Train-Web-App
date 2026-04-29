@@ -434,31 +434,35 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 # ---------------------------------------------------------------------------
 
 def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
-    """Stacked bar chart: Used Solar + Spillage by Winter/Spring/Summer/Autumn."""
+    """Line chart: average hourly Used Solar by season (Winter/Spring/Summer/Autumn)."""
     _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
-    used_cols = [f"{c}_used" for c in hour_cols]
-    supply_cols = [f"{c}_supply" for c in hour_cols]
 
     merged["_season4"] = merged["Date_dt"].dt.month.apply(_season_label)
     season_order = ["Winter", "Spring", "Summer", "Autumn"]
-    used_vals, spill_vals = [], []
-    for s in season_order:
-        sub = merged[merged["_season4"] == s]
-        u = float(sub[used_cols].to_numpy().sum())
-        sp = float(sub[supply_cols].to_numpy().sum()) - u
-        used_vals.append(u)
-        spill_vals.append(max(sp, 0.0))
+    colours = {
+        "Winter": "#1e75bb",
+        "Spring": "#e22a87",
+        "Summer": "#ffd300",
+        "Autumn": "#6b7280",
+    }
 
-    x = list(range(len(season_order)))
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.bar(x, used_vals, label="Used Solar", color="#ffd300")
-    ax.bar(x, spill_vals, bottom=used_vals, label="Spillage", color="#d4dae6")
+    x = list(range(24))
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for season in season_order:
+        sub = merged[merged["_season4"] == season]
+        if sub.empty:
+            continue
+        means = [sub[f"{c}_used"].mean() for c in hour_cols]
+        ax.plot(x, means, label=season, color=colours[season], linewidth=2.5)
+
     ax.set_xticks(x)
-    ax.set_xticklabels(season_order)
-    ax.set_ylabel("Energy (same units as input)")
-    ax.set_title("Solar Yield by Season")
+    ax.set_xticklabels(hour_cols, rotation=45, ha="right")
+    ax.set_xlabel("Hour")
+    ax.set_ylabel("Energy (same units as input files)")
+    ax.set_title("Average Hourly Solar Yield by Season")
     ax.legend()
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     plt.tight_layout()
