@@ -434,7 +434,7 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 # ---------------------------------------------------------------------------
 
 def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
-    """Line chart: average hourly Used Solar by season (Winter/Spring/Summer/Autumn)."""
+    """Line chart: average hourly Used Solar by season + overall Average Demand reference."""
     _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
 
@@ -449,12 +449,18 @@ def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame)
 
     x = list(range(24))
     fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Overall average demand reference line (dashed pink, matches avg-profile chart)
+    avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
+    ax.plot(x, avg_demand, label="Average Demand", color="#e22a87",
+            linewidth=2, linestyle="--", zorder=5)
+
     for season in season_order:
         sub = merged[merged["_season4"] == season]
         if sub.empty:
             continue
         means = [sub[f"{c}_used"].mean() for c in hour_cols]
-        ax.plot(x, means, label=season, color=colours[season], linewidth=2.5)
+        ax.plot(x, means, label=f"{season} Solar Used", color=colours[season], linewidth=2.5)
 
     ax.set_xticks(x)
     ax.set_xticklabels(hour_cols, rotation=45, ha="right")
@@ -472,34 +478,35 @@ def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame)
     return buf.getvalue()
 
 
-def build_daytype_demand_chart(demand_df: pd.DataFrame) -> bytes:
-    """Line chart: average hourly traction demand by Weekday / Saturday / Sunday."""
-    d_df = _normalize_hour_columns(demand_df.copy())
-    hour_cols = _ensure_24_hours(d_df, "DEMAND")
-    d_df["Date_dt"] = _parse_date_series(d_df["Date"])
-    dow = d_df["Date_dt"].dt.dayofweek  # 0=Mon … 6=Sun
-    d_df["_daytype"] = dow.apply(
+def build_daytype_demand_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
+    """Line chart: demand (solid) and used solar (dashed) by Weekday / Saturday / Sunday."""
+    _, _, merged = compute_metrics(demand_df, supply_df)
+    hour_cols = [f"{h:02d}:00" for h in range(24)]
+
+    dow = merged["Date_dt"].dt.dayofweek  # 0=Mon … 6=Sun
+    merged["_daytype"] = dow.apply(
         lambda d: "Sunday" if d == 6 else ("Saturday" if d == 5 else "Weekday")
     )
-    for c in hour_cols:
-        d_df[c] = pd.to_numeric(d_df[c], errors="coerce").fillna(0)
 
     x = list(range(24))
     fig, ax = plt.subplots(figsize=(12, 6))
     colours = {"Weekday": "#e22a87", "Saturday": "#1e75bb", "Sunday": "#ffd300"}
     for label, colour in colours.items():
-        sub = d_df[d_df["_daytype"] == label]
+        sub = merged[merged["_daytype"] == label]
         if sub.empty:
             continue
-        means = [sub[c].mean() for c in hour_cols]
-        ax.plot(x, means, label=label, color=colour, linewidth=2.5)
+        demand_means = [sub[f"{c}_demand"].mean() for c in hour_cols]
+        solar_means  = [sub[f"{c}_used"].mean()   for c in hour_cols]
+        ax.plot(x, demand_means, label=f"{label} Demand",     color=colour, linewidth=2.5)
+        ax.plot(x, solar_means,  label=f"{label} Solar Used", color=colour, linewidth=2,
+                linestyle="--")
 
     ax.set_xticks(x)
     ax.set_xticklabels(hour_cols, rotation=45, ha="right")
     ax.set_xlabel("Hour")
-    ax.set_ylabel("Average Demand (same units as input)")
-    ax.set_title("Average Hourly Traction Demand by Day Type")
-    ax.legend()
+    ax.set_ylabel("Energy (same units as input files)")
+    ax.set_title("Traction Demand & Solar Use by Day Type")
+    ax.legend(ncols=2)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -543,7 +550,7 @@ def run_solar_pipeline(demand_csv: str, pvgis_csv: str) -> SolarResult:
 
     # Step 5 — additional charts
     seasonal_chart_png = build_seasonal_solar_chart(demand_hourly_df, pvgis_hourly_df)
-    daytype_chart_png = build_daytype_demand_chart(demand_hourly_df)
+    daytype_chart_png = build_daytype_demand_chart(demand_hourly_df, pvgis_hourly_df)
 
     return SolarResult(
         demand_hourly_xlsx=_df_to_xlsx_bytes(demand_hourly_df),
