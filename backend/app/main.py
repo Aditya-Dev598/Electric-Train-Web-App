@@ -6,11 +6,9 @@ Initializes all data sources, configures middleware, and mounts routes.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import sys
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -92,28 +90,6 @@ def create_app() -> FastAPI:
     # is actually present in the database (e.g. CRDFCEN→CDF over CRDFBUS→CCB).
     mileage._coord_fallback.load()
     _known_coords: set = set(mileage._coord_fallback._coords.keys())
-
-    # One-time background fetch: if no .coord_cache.json yet, download the full
-    # UK station coordinate set from Overpass (~2 min) and save to cache so all
-    # stations (not just the ~2650 in the bundled file) are available for recalc.
-    _coord_cache_path = Path(settings.mileage_data_path).parent / ".coord_cache.json"
-    if not _coord_cache_path.exists():
-        def _bg_coord_fetch() -> None:
-            try:
-                logger.info("Background: fetching full UK station coords from Overpass …")
-                mileage._coord_fallback._fetch_and_cache()
-                if _coord_cache_path.exists():
-                    new_raw = json.loads(_coord_cache_path.read_text(encoding="utf-8"))
-                    mileage._coord_fallback._coords.update(
-                        mileage._coord_fallback._parse_coords_dict(new_raw)
-                    )
-                    logger.info(
-                        "Background coord fetch complete: %d stations now available",
-                        len(mileage._coord_fallback._coords),
-                    )
-            except Exception as exc:
-                logger.warning("Background coord fetch failed: %s", exc)
-        threading.Thread(target=_bg_coord_fetch, daemon=True, name="coord-fetch").start()
 
     def _tiploc_to_crs_with_variants(tiploc: str):
         """Resolve TIPLOC → CRS, preferring variants that have coordinate data.
