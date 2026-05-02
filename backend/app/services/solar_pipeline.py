@@ -434,39 +434,47 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 # ---------------------------------------------------------------------------
 
 def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
-    """Line chart: average hourly Used Solar by season + overall Average Demand reference."""
+    """Line chart: seasonal supply profiles vs average demand, with average solar used shaded."""
     _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
 
-    merged["_season4"] = merged["Date_dt"].dt.month.apply(_season_label)
-    season_order = ["Winter", "Spring", "Summer", "Autumn"]
-    colours = {
-        "Winter": "#1e75bb",
-        "Spring": "#e22a87",
-        "Summer": "#ffd300",
-        "Autumn": "#6b7280",
-    }
-
     x = list(range(24))
+
+    # Overall annual averages
+    avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
+    avg_supply = [merged[f"{c}_supply"].mean() for c in hour_cols]
+    avg_used   = [min(d, s) for d, s in zip(avg_demand, avg_supply)]
+
+    # Seasonal supply averages — reuse existing Season column (DJF / JJA / SHOULDER)
+    season_colours = {"DJF": "#1e75bb", "JJA": "#ffd300", "SHOULDER": "#6b7280"}
+    season_labels  = {"DJF": "Winter Supply (DJF)", "JJA": "Summer Supply (JJA)", "SHOULDER": "Shoulder Supply"}
+
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Overall average demand reference line (dashed pink, matches avg-profile chart)
-    avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
-    ax.plot(x, avg_demand, label="Average Demand", color="#e22a87",
-            linewidth=2, linestyle="--", zorder=5)
+    # Shaded average solar used (drawn first so lines sit on top)
+    ax.fill_between(x, avg_used, color="#ffe784", alpha=0.6, label="Avg Solar Used", zorder=1)
 
-    for season in season_order:
-        sub = merged[merged["_season4"] == season]
+    # Average demand — pink solid (matches all other charts)
+    ax.plot(x, avg_demand, label="Average Demand", color="#e22a87", linewidth=2.5, zorder=4)
+
+    # Average annual supply — dashed neutral reference line
+    ax.plot(x, avg_supply, label="Average Supply (Annual)", color="#374151",
+            linewidth=2, linestyle="--", zorder=3)
+
+    # Three seasonal supply lines
+    for season in ["DJF", "JJA", "SHOULDER"]:
+        sub = merged[merged["Season"] == season]
         if sub.empty:
             continue
-        means = [sub[f"{c}_used"].mean() for c in hour_cols]
-        ax.plot(x, means, label=f"{season} Solar Used", color=colours[season], linewidth=2.5)
+        season_avg = [sub[f"{c}_supply"].mean() for c in hour_cols]
+        ax.plot(x, season_avg, label=season_labels[season],
+                color=season_colours[season], linewidth=2, zorder=2)
 
     ax.set_xticks(x)
     ax.set_xticklabels(hour_cols, rotation=45, ha="right")
     ax.set_xlabel("Hour")
     ax.set_ylabel("Energy (same units as input files)")
-    ax.set_title("Average Hourly Solar Yield by Season")
+    ax.set_title("Average Hourly Supply by Season vs Demand")
     ax.legend()
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
     ax.spines["top"].set_visible(False)
