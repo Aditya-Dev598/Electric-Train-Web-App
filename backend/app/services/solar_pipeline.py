@@ -487,7 +487,7 @@ def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame)
 
 
 def build_daytype_demand_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
-    """Line chart: demand (solid) and used solar (dashed) by Weekday / Saturday / Sunday."""
+    """Line chart: demand by day type, average weekly demand/supply, and shaded solar used."""
     _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
 
@@ -496,24 +496,37 @@ def build_daytype_demand_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame)
         lambda d: "Sunday" if d == 6 else ("Saturday" if d == 5 else "Weekday")
     )
 
+    # Overall weekly averages
+    avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
+    avg_supply = [merged[f"{c}_supply"].mean() for c in hour_cols]
+    avg_used   = [min(d, s) for d, s in zip(avg_demand, avg_supply)]
+
     x = list(range(24))
     fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Shaded average solar used (drawn first so lines sit on top)
+    ax.fill_between(x, avg_used, color="#ffe784", alpha=0.6, label="Avg Solar Used", zorder=1)
+
+    # Three day-type demand lines (solid)
     colours = {"Weekday": "#e22a87", "Saturday": "#1e75bb", "Sunday": "#ffd300"}
     for label, colour in colours.items():
         sub = merged[merged["_daytype"] == label]
         if sub.empty:
             continue
         demand_means = [sub[f"{c}_demand"].mean() for c in hour_cols]
-        solar_means  = [sub[f"{c}_used"].mean()   for c in hour_cols]
-        ax.plot(x, demand_means, label=f"{label} Demand",     color=colour, linewidth=2.5)
-        ax.plot(x, solar_means,  label=f"{label} Solar Used", color=colour, linewidth=2,
-                linestyle="--")
+        ax.plot(x, demand_means, label=f"{label} Demand", color=colour, linewidth=2.5, zorder=3)
+
+    # Average weekly demand and supply reference lines (dashed)
+    ax.plot(x, avg_demand, label="Avg Weekly Demand", color="#374151",
+            linewidth=2, linestyle="--", zorder=4)
+    ax.plot(x, avg_supply, label="Avg Weekly Supply", color="#6b7280",
+            linewidth=2, linestyle="--", zorder=4)
 
     ax.set_xticks(x)
     ax.set_xticklabels(hour_cols, rotation=45, ha="right")
     ax.set_xlabel("Hour")
     ax.set_ylabel("Energy (same units as input files)")
-    ax.set_title("Traction Demand & Solar Use by Day Type")
+    ax.set_title("Traction Demand by Day Type with Weekly Averages")
     ax.legend(ncols=2)
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.4)
     ax.spines["top"].set_visible(False)
