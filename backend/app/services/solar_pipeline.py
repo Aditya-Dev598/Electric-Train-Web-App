@@ -264,48 +264,38 @@ def _match_supply_to_demand(
     return merged
 
 
-def build_average_profile(
-    demand_df: pd.DataFrame, supply_df: pd.DataFrame
+def _build_avg_profile_from_merged(
+    merged: pd.DataFrame, hour_cols: list[str]
 ) -> tuple[pd.DataFrame, bytes, bytes]:
-    """Return (profile_df, png_bytes, xlsx_bytes)."""
-    d_df = _normalize_hour_columns(demand_df)
-    s_df = _normalize_hour_columns(supply_df)
-
-    if "Date" not in d_df.columns or "Date" not in s_df.columns:
-        raise ValueError("Both demand and supply DataFrames must have a 'Date' column.")
-
-    hour_cols = _ensure_24_hours(d_df, "DEMAND")
-    _ensure_24_hours(s_df, "SUPPLY")
-
-    merged = _match_supply_to_demand(d_df, s_df, hour_cols)
-
+    """Build average profile PNG + XLSX from a pre-computed merged detail DataFrame."""
     avg_demand, avg_supply, used_solar_avg = [], [], []
     for c in hour_cols:
-        d = merged[f"{c}_demand"].mean()
-        s = merged[f"{c}_supply"].mean()
-        avg_demand.append(d)
-        avg_supply.append(s)
-        used_solar_avg.append(min(d, s))
+        d_col = merged[f"{c}_demand"]
+        s_col = merged[f"{c}_supply"]
+        avg_demand.append(d_col.mean())
+        avg_supply.append(s_col.mean())
+        # Correct: average of per-row minimums, not min of averages
+        used_solar_avg.append(
+            pd.concat([d_col, s_col], axis=1).min(axis=1).mean()
+        )
 
     profile = pd.DataFrame({
         "Hour": hour_cols,
         "Average Demand": avg_demand,
         "Average Supply": avg_supply,
-        "Used Solar (min of averages)": used_solar_avg,
+        "Used Solar": used_solar_avg,
     })
 
-    # XLSX output
     xlsx_buf = io.BytesIO()
     with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
         profile.to_excel(writer, index=False)
     xlsx_bytes = xlsx_buf.getvalue()
 
-    # PNG output
     x = list(range(24))
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(x, profile["Average Demand"], label="Average Demand", color="#e22a87", linewidth=2.5)
     ax.plot(x, profile["Average Supply"], label="Average Supply", color="#1e75bb", linewidth=2.5)
-    ax.fill_between(x, profile["Used Solar (min of averages)"], color="#ffe784", alpha=0.6, label="Used Solar")
+    ax.fill_between(x, profile["Used Solar"], color="#ffe784", alpha=0.6, label="Used Solar")
     ax.set_xlabel("Hour")
     ax.set_ylabel("Energy (same units as input files)")
     ax.set_xticks(x)
@@ -321,6 +311,20 @@ def build_average_profile(
     png_bytes = png_buf.getvalue()
 
     return profile, png_bytes, xlsx_bytes
+
+
+def build_average_profile(
+    demand_df: pd.DataFrame, supply_df: pd.DataFrame
+) -> tuple[pd.DataFrame, bytes, bytes]:
+    """Return (profile_df, png_bytes, xlsx_bytes)."""
+    d_df = _normalize_hour_columns(demand_df)
+    s_df = _normalize_hour_columns(supply_df)
+    if "Date" not in d_df.columns or "Date" not in s_df.columns:
+        raise ValueError("Both demand and supply DataFrames must have a 'Date' column.")
+    hour_cols = _ensure_24_hours(d_df, "DEMAND")
+    _ensure_24_hours(s_df, "SUPPLY")
+    _, _, merged = compute_metrics(d_df, s_df)
+    return _build_avg_profile_from_merged(merged, hour_cols)
 
 
 # ---------------------------------------------------------------------------
@@ -411,15 +415,22 @@ def compute_metrics(
     return annual, pd.DataFrame(seasonal_rows), merged
 
 
-def save_metrics_workbook(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
-    """Return the solar metrics Excel workbook as bytes."""
-    annual, seasonal, detail = compute_metrics(demand_df, supply_df)
+def _metrics_xlsx_from_computed(
+    annual: pd.DataFrame, seasonal: pd.DataFrame, detail: pd.DataFrame
+) -> bytes:
+    """Write pre-computed metric DataFrames to an Excel workbook (no recomputation)."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         annual.to_excel(writer, sheet_name="Annual Summary", index=False)
         seasonal.to_excel(writer, sheet_name="Seasonal Summary", index=False)
         detail.to_excel(writer, sheet_name="Matched Detail", index=False)
     return buf.getvalue()
+
+
+def save_metrics_workbook(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
+    """Return the solar metrics Excel workbook as bytes."""
+    annual, seasonal, detail = compute_metrics(demand_df, supply_df)
+    return _metrics_xlsx_from_computed(annual, seasonal, detail)
 
 
 def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
@@ -433,17 +444,16 @@ def _df_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 # Chart generators (returned as PNG bytes alongside existing avg_profile_png)
 # ---------------------------------------------------------------------------
 
-def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
+def build_seasonal_solar_chart(merged: pd.DataFrame) -> bytes:
     """Line chart: seasonal supply profiles vs average demand, with average solar used shaded."""
-    _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
 
     x = list(range(24))
 
-    # Overall annual averages
+    # Overall annual averages — used solar is avg of per-day minimums (correct)
     avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
     avg_supply = [merged[f"{c}_supply"].mean() for c in hour_cols]
-    avg_used   = [min(d, s) for d, s in zip(avg_demand, avg_supply)]
+    avg_used   = [merged[f"{c}_used"].mean() for c in hour_cols]
 
     # Seasonal supply averages — reuse existing Season column (DJF / JJA / SHOULDER)
     season_colours = {"DJF": "#1e75bb", "JJA": "#ffd300", "SHOULDER": "#6b7280"}
@@ -486,20 +496,20 @@ def build_seasonal_solar_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame)
     return buf.getvalue()
 
 
-def build_daytype_demand_chart(demand_df: pd.DataFrame, supply_df: pd.DataFrame) -> bytes:
+def build_daytype_demand_chart(merged: pd.DataFrame) -> bytes:
     """Line chart: demand by day type, average weekly demand/supply, and shaded solar used."""
-    _, _, merged = compute_metrics(demand_df, supply_df)
     hour_cols = [f"{h:02d}:00" for h in range(24)]
 
+    merged = merged.copy()
     dow = merged["Date_dt"].dt.dayofweek  # 0=Mon … 6=Sun
     merged["_daytype"] = dow.apply(
         lambda d: "Sunday" if d == 6 else ("Saturday" if d == 5 else "Weekday")
     )
 
-    # Overall weekly averages
+    # Overall weekly averages — used solar is avg of per-day minimums (correct)
     avg_demand = [merged[f"{c}_demand"].mean() for c in hour_cols]
     avg_supply = [merged[f"{c}_supply"].mean() for c in hour_cols]
-    avg_used   = [min(d, s) for d, s in zip(avg_demand, avg_supply)]
+    avg_used   = [merged[f"{c}_used"].mean() for c in hour_cols]
 
     x = list(range(24))
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -558,20 +568,21 @@ def run_solar_pipeline(demand_csv: str, pvgis_csv: str) -> SolarResult:
     # Step 2 — PVGIS → hourly wide
     pvgis_hourly_df = clean_pvgis_to_wide_hourly(pvgis_csv)
 
-    # Step 3 — average profile + plot
-    _, png_bytes, avg_profile_xlsx = build_average_profile(demand_hourly_df, pvgis_hourly_df)
-
-    # Step 4 — solar metrics workbook
-    metrics_xlsx = save_metrics_workbook(demand_hourly_df, pvgis_hourly_df)
-
-    # Extract top-level KPIs for API response
-    annual, _, _ = compute_metrics(demand_hourly_df, pvgis_hourly_df)
+    # Step 3 — compute all metrics once; every downstream step reuses this result
+    hour_cols = [f"{h:02d}:00" for h in range(24)]
+    annual, seasonal, merged = compute_metrics(demand_hourly_df, pvgis_hourly_df)
     solar_share = float(annual["Solar Share (%)"].iloc[0])
     utilisation = float(annual["Utilisation (%)"].iloc[0])
 
-    # Step 5 — additional charts
-    seasonal_chart_png = build_seasonal_solar_chart(demand_hourly_df, pvgis_hourly_df)
-    daytype_chart_png = build_daytype_demand_chart(demand_hourly_df, pvgis_hourly_df)
+    # Step 4 — average profile (pre-computed merged, correct per-row Used Solar)
+    _, png_bytes, avg_profile_xlsx = _build_avg_profile_from_merged(merged, hour_cols)
+
+    # Step 5 — solar metrics workbook (pre-computed DataFrames, no recomputation)
+    metrics_xlsx = _metrics_xlsx_from_computed(annual, seasonal, merged)
+
+    # Step 6 — additional charts (pre-computed merged)
+    seasonal_chart_png = build_seasonal_solar_chart(merged)
+    daytype_chart_png = build_daytype_demand_chart(merged)
 
     return SolarResult(
         demand_hourly_xlsx=_df_to_xlsx_bytes(demand_hourly_df),
