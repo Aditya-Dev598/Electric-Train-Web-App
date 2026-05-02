@@ -1142,35 +1142,37 @@ export default function Home() {
               Analysis complete — Solar share: <strong>{solarResult.solar_share_pct.toFixed(1)}%</strong> &nbsp;|&nbsp;
               Utilisation: <strong>{solarResult.utilisation_pct.toFixed(1)}%</strong>
             </div>
-            <div style={{ marginBottom: '1rem' }}>
-              <h3>Average Demand / Supply Profile</h3>
-              <img
-                src={`data:image/png;base64,${solarResult.avg_profile_png_b64}`}
-                alt="Average demand/supply profile"
-                style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
-              />
-            </div>
-            <div style={{ marginBottom: '1rem' }}>
-              <h3>Solar Yield by Season</h3>
-              {solarResult.seasonal_chart_png_b64
-                ? <img
-                    src={`data:image/png;base64,${solarResult.seasonal_chart_png_b64}`}
-                    alt="Solar yield by season"
-                    style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
-                  />
-                : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.85rem' }}>Re-run the analysis to generate this chart.</p>
-              }
-            </div>
-            <div style={{ marginBottom: '1rem' }}>
-              <h3>Traction Demand by Day Type</h3>
-              {solarResult.daytype_chart_png_b64
-                ? <img
-                    src={`data:image/png;base64,${solarResult.daytype_chart_png_b64}`}
-                    alt="Traction demand by day type"
-                    style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
-                  />
-                : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.85rem' }}>Re-run the analysis to generate this chart.</p>
-              }
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1rem' }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>Average Demand / Supply Profile</h3>
+                <img
+                  src={`data:image/png;base64,${solarResult.avg_profile_png_b64}`}
+                  alt="Average demand/supply profile"
+                  style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>Solar Yield by Season</h3>
+                {solarResult.seasonal_chart_png_b64
+                  ? <img
+                      src={`data:image/png;base64,${solarResult.seasonal_chart_png_b64}`}
+                      alt="Solar yield by season"
+                      style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                    />
+                  : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.8rem' }}>Re-run the analysis to generate this chart.</p>
+                }
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.4rem' }}>Traction Demand by Day Type</h3>
+                {solarResult.daytype_chart_png_b64
+                  ? <img
+                      src={`data:image/png;base64,${solarResult.daytype_chart_png_b64}`}
+                      alt="Traction demand by day type"
+                      style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                    />
+                  : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.8rem' }}>Re-run the analysis to generate this chart.</p>
+                }
+              </div>
             </div>
             <div className="button-row" style={{ flexWrap: 'wrap' }}>
               {solarResult.files.map(f => (
@@ -1205,35 +1207,37 @@ export default function Home() {
                 </div>
                 {expandedSolarRun === run.run_id && (
                   <div style={{ padding: '0.75rem' }}>
-                    <div style={{ marginBottom: '0.75rem' }}>
-                      <h3>Average Demand / Supply Profile</h3>
-                      <img
-                        src={`data:image/png;base64,${run.avg_profile_png_b64}`}
-                        alt="Average demand/supply profile"
-                        style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
-                      />
-                    </div>
-                    <div style={{ marginBottom: '0.75rem' }}>
-                      <h3>Solar Yield by Season</h3>
-                      {run.seasonal_chart_png_b64
-                        ? <img
-                            src={`data:image/png;base64,${run.seasonal_chart_png_b64}`}
-                            alt="Solar yield by season"
-                            style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
-                          />
-                        : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.85rem' }}>Not available — re-run to generate.</p>
-                      }
-                    </div>
-                    <div style={{ marginBottom: '0.75rem' }}>
-                      <h3>Traction Demand by Day Type</h3>
-                      {run.daytype_chart_png_b64
-                        ? <img
-                            src={`data:image/png;base64,${run.daytype_chart_png_b64}`}
-                            alt="Traction demand by day type"
-                            style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
-                          />
-                        : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.85rem' }}>Not available — re-run to generate.</p>
-                      }
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <h3 style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Average Demand / Supply Profile</h3>
+                        <img
+                          src={`data:image/png;base64,${run.avg_profile_png_b64}`}
+                          alt="Average demand/supply profile"
+                          style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                        />
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <h3 style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Solar Yield by Season</h3>
+                        {run.seasonal_chart_png_b64
+                          ? <img
+                              src={`data:image/png;base64,${run.seasonal_chart_png_b64}`}
+                              alt="Solar yield by season"
+                              style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                            />
+                          : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.8rem' }}>Not available — re-run to generate.</p>
+                        }
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <h3 style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.3rem' }}>Traction Demand by Day Type</h3>
+                        {run.daytype_chart_png_b64
+                          ? <img
+                              src={`data:image/png;base64,${run.daytype_chart_png_b64}`}
+                              alt="Traction demand by day type"
+                              style={{ width: '100%', borderRadius: '0.375rem', border: '1px solid var(--border, #e5e7eb)' }}
+                            />
+                          : <p style={{ color: 'var(--text-muted, #6b7280)', fontSize: '0.8rem' }}>Not available — re-run to generate.</p>
+                        }
+                      </div>
                     </div>
                     <div className="button-row" style={{ flexWrap: 'wrap' }}>
                       {run.files.map(f => (
