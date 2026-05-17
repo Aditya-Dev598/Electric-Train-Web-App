@@ -1149,6 +1149,24 @@ export default function Home() {
                 style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
               />
             </div>
+            {solarResult.seasonal_chart_png_b64 && (
+              <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
+                <img
+                  src={`data:image/png;base64,${solarResult.seasonal_chart_png_b64}`}
+                  alt="Solar yield by season"
+                  style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
+                />
+              </div>
+            )}
+            {solarResult.daytype_chart_png_b64 && (
+              <div style={{ marginBottom: '1rem', textAlign: 'center' }}>
+                <img
+                  src={`data:image/png;base64,${solarResult.daytype_chart_png_b64}`}
+                  alt="Traction demand by day type"
+                  style={{ maxWidth: '100%', borderRadius: '0.5rem', border: '1px solid var(--border, #e5e7eb)' }}
+                />
+              </div>
+            )}
             <div className="button-row" style={{ flexWrap: 'wrap' }}>
               {solarResult.files.map(f => (
                 <a
@@ -1189,6 +1207,24 @@ export default function Home() {
                         style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
                       />
                     </div>
+                    {run.seasonal_chart_png_b64 && (
+                      <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+                        <img
+                          src={`data:image/png;base64,${run.seasonal_chart_png_b64}`}
+                          alt="Solar yield by season"
+                          style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
+                        />
+                      </div>
+                    )}
+                    {run.daytype_chart_png_b64 && (
+                      <div style={{ textAlign: 'center', marginBottom: '0.75rem' }}>
+                        <img
+                          src={`data:image/png;base64,${run.daytype_chart_png_b64}`}
+                          alt="Traction demand by day type"
+                          style={{ maxWidth: '100%', borderRadius: '0.375rem' }}
+                        />
+                      </div>
+                    )}
                     <div className="button-row" style={{ flexWrap: 'wrap' }}>
                       {run.files.map(f => (
                         <a

@@ -141,6 +141,9 @@ def hh_wide_to_hourly_wide(demand_csv: str) -> pd.DataFrame:
             "Expected 48 half-hour columns named e.g. '0:30', '1:00' … '0:00'."
         )
 
+    # Normalise end-of-day notation: 24:00:00 / 24:00 → 00:00 (midnight wrap-around)
+    time_map = {k: ("00:00" if v == "24:00" else v) for k, v in time_map.items()}
+
     hh = df[[date_col] + list(time_map.keys())].rename(columns=time_map).copy()
     hh[date_col] = pd.to_datetime(hh[date_col], dayfirst=True, errors="coerce")
     if hh[date_col].isna().mean() > 0.2:

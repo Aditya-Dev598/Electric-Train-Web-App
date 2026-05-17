@@ -10,8 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
+import logging
+
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 
 from backend.app.security.validators import (

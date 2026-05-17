@@ -332,6 +332,8 @@ export interface SolarRunResult {
   utilisation_pct: number;
   files: string[];
   avg_profile_png_b64: string;
+  seasonal_chart_png_b64?: string;
+  daytype_chart_png_b64?: string;
   created_at?: string;
 }
 
@@ -341,6 +343,8 @@ export interface SolarRunMeta {
   utilisation_pct: number;
   files: string[];
   avg_profile_png_b64: string;
+  seasonal_chart_png_b64?: string;
+  daytype_chart_png_b64?: string;
   created_at: string;
 }
 
