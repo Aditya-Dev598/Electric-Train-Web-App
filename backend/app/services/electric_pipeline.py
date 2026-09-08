@@ -118,12 +118,40 @@ def _allocate_kwh(start: datetime, end: datetime, kwh: float, edges: list[dateti
 # Format transform: scraper output → Electric script columns
 # ---------------------------------------------------------------------------
 
-def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert scraper-output column names/formats to what the pipeline expects."""
+def _normalise_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise column names: strip whitespace and lowercase for matching.
+
+    Returns a copy with lowercased, stripped column names so that AI-generated
+    headers like "Route_Variant", "DEP_TIME", " cars " all resolve correctly.
+    The original casing is discarded because downstream code uses exact lowercase names.
+    """
     df = df.copy()
+    df.columns = [c.strip().lower() for c in df.columns]
+    return df
+
+
+def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert scraper-output or AI-edited column names/formats to pipeline expectations."""
+    df = _normalise_columns(df)
+
+    # Alternative column name aliases (all already lowercased by _normalise_columns)
+    _ALIASES: dict[str, list[str]] = {
+        "dep_time":        ["departure_time", "departure", "time", "dep"],
+        "date":            ["service_date", "run_date", "travel_date"],
+        "route_variant":   ["route", "variant", "route_name", "service"],
+        "train_type":      ["train_class", "class", "rolling_stock", "stock_type"],
+        "cars":            ["number_of_coaches", "coaches", "carriages", "vehicles"],
+        "distance_miles":  ["dist_miles", "dist"],
+        "distance":        ["dist_km"],
+    }
+    for canonical, aliases in _ALIASES.items():
+        if canonical not in df.columns:
+            for alias in aliases:
+                if alias in df.columns:
+                    df = df.rename(columns={alias: canonical})
+                    break
 
     # departure_time HH:MM:SS → dep_time HH:MM
-    # Handles both zero-padded ("08:30:00") and single-digit-hour ("8:30:00") formats.
     if "departure_time" in df.columns and "dep_time" not in df.columns:
         def _norm_time(s: str) -> str:
             parts = str(s).strip().split(":")
@@ -134,19 +162,28 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
                     pass
             return str(s).strip()[:5]
         df["dep_time"] = df["departure_time"].map(_norm_time)
+    elif "dep_time" in df.columns:
+        # Normalise any existing dep_time to HH:MM even if already present
+        def _norm_time(s: str) -> str:  # type: ignore[redefined-outer-name]
+            parts = str(s).strip().split(":")
+            if len(parts) >= 2:
+                try:
+                    return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+                except ValueError:
+                    pass
+            return str(s).strip()[:5]
+        df["dep_time"] = df["dep_time"].map(_norm_time)
 
-    # date normalisation: YYYY-MM-DD and DD-MM-YYYY → DD/MM/YYYY
+    # date normalisation: YYYY-MM-DD, DD-MM-YYYY, DD.MM.YYYY → DD/MM/YYYY
     if "date" in df.columns:
         def _reformat_date(v: str) -> str:
-            # Strip trailing timestamp suffix produced by pandas datetime serialisation
-            # e.g. "2026-04-05 00:00:00" → "2026-04-05" before format matching.
             v = str(v).strip().split(" ")[0]
-            for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y"):
                 try:
                     return datetime.strptime(v, fmt).strftime("%d/%m/%Y")
                 except ValueError:
                     pass
-            return v  # already DD/MM/YYYY or unknown
+            return v  # already DD/MM/YYYY or unrecognised
         df["date"] = df["date"].map(_reformat_date)
 
     # distance_miles → distance
@@ -157,12 +194,31 @@ def _transform_timetable(df: pd.DataFrame) -> pd.DataFrame:
     if "number_of_coaches" in df.columns and "cars" not in df.columns:
         df = df.rename(columns={"number_of_coaches": "cars"})
 
-    # train_class → train_type (kept as-is; user fills correct value in editor)
-    if "train_class" in df.columns and "train_type" not in df.columns:
-        df = df.rename(columns={"train_class": "train_type"})
-
-    # drop stop_type if present
+    # drop columns that confuse downstream stages
     df = df.drop(columns=[c for c in ["stop_type"] if c in df.columns])
+
+    return df
+
+
+def _transform_route(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise AI-edited route CSV column names to pipeline expectations."""
+    df = _normalise_columns(df)
+
+    _ALIASES: dict[str, list[str]] = {
+        "route_variant":  ["route", "variant", "route_name", "service"],
+        "from_station":   ["origin", "from", "departure_station", "from_stop"],
+        "to_station":     ["destination", "to", "arrival_station", "to_stop"],
+        "distance":       ["distance_miles", "dist_miles", "dist", "miles"],
+        "run_min":        ["run_minutes", "journey_min", "journey_minutes", "runtime"],
+        "wait_min":       ["wait_minutes", "dwell", "dwell_min", "dwell_minutes"],
+        "seq":            ["sequence", "order", "stop_seq"],
+    }
+    for canonical, aliases in _ALIASES.items():
+        if canonical not in df.columns:
+            for alias in aliases:
+                if alias in df.columns:
+                    df = df.rename(columns={alias: canonical})
+                    break
 
     return df
 
@@ -494,21 +550,18 @@ def run_pipeline(
         - Debug CSV string listing station mismatches, or None if all stations resolved.
     """
     tt = pd.read_csv(io.StringIO(timetable_csv.lstrip("\ufeff")))
-    tt.columns = tt.columns.str.strip()
     route = pd.read_csv(io.StringIO(route_csv.lstrip("\ufeff")))
-    route.columns = route.columns.str.strip()
     stations = pd.read_csv(station_points_path, encoding="utf-8-sig")
     stations.columns = stations.columns.str.strip()
 
-    # Apply format transform (handles scraper column names transparently)
+    # Apply format transforms (handles scraper and AI-edited column names transparently)
     tt = _transform_timetable(tt)
+    route = _transform_route(route)
 
     # Validate post-transform
     for col in ["route_variant", "date", "dep_time", "train_type", "cars"]:
         if col not in tt.columns:
             raise ValueError(f"Timetable CSV missing required column '{col}' (after transform)")
-    if "distance_miles" in route.columns and "distance" not in route.columns:
-        route = route.rename(columns={"distance_miles": "distance"})
     for col in ["route_variant", "seq", "from_station", "to_station", "distance", "run_min"]:
         if col not in route.columns:
             raise ValueError(f"Route CSV missing required column '{col}'")

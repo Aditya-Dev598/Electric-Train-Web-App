@@ -119,6 +119,7 @@ def build_route_rows(
     mileage: MileageResolver,
     audit: AuditLogger,
     focus_tiploc: Optional[str] = None,
+    focus_tiplocs: Optional[set] = None,
 ) -> list[RouteRow]:
     """Build route CSV rows for a single schedule's stopping pattern.
 
@@ -134,12 +135,15 @@ def build_route_rows(
     splitting the containing segment into two rows.
     """
     focus = focus_tiploc.strip().upper() if focus_tiploc else None
+    focus_set: Optional[set] = focus_tiplocs if focus_tiplocs else (
+        {focus} if focus else None
+    )
 
     # Build ordered list: passenger stops + focus station (at its natural position)
     included = []
     for loc in schedule.locations:
         t = loc.tiploc.upper()
-        is_focus = focus and t == focus
+        is_focus = bool(focus_set) and t in focus_set
         if is_focus or (loc.is_passenger_stop and corpus.is_passenger_station(t)):
             included.append(loc)
 
@@ -161,7 +165,7 @@ def build_route_rows(
         # stop_type: "pass" if from_station is the focus pass-through, else "stop"
         stop_type = (
             "pass"
-            if focus and from_tiploc == focus and not from_loc.is_passenger_stop
+            if focus_set and from_tiploc in focus_set and not from_loc.is_passenger_stop
             else "stop"
         )
 

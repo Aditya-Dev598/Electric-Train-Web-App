@@ -231,6 +231,7 @@ class Orchestrator:
         unique_routes = identify_unique_routes(all_effective_flat, self._corpus, all_tiplocs[0])
         pattern_to_variant = generate_variant_names(unique_routes, self._corpus)
 
+        focus_tiplocs_set = set(t.upper() for t in all_tiplocs)
         for pattern, representative_schedule in unique_routes.items():
             variant_name = pattern_to_variant[pattern]
             route_rows = build_route_rows(
@@ -240,6 +241,7 @@ class Orchestrator:
                 self._mileage,
                 self._audit,
                 focus_tiploc=tiploc,
+                focus_tiplocs=focus_tiplocs_set,
             )
             result.route_rows.extend(route_rows)
 
@@ -266,7 +268,7 @@ class Orchestrator:
 
                 # Look up route_variant for this schedule's stopping pattern
                 pattern = extract_stopping_pattern(schedule, self._corpus, all_tiplocs[0])
-                variant_name = pattern_to_variant.get(pattern, "")
+                variant_name = pattern_to_variant.get(pattern) or f"Service {schedule.train_uid}"
 
                 # Darwin enrichment
                 darwin_attempts += 1

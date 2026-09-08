@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -115,6 +116,17 @@ def create_app() -> FastAPI:
         return first_valid  # fallback: first valid CRS even if not in DB
 
     mileage.set_crs_lookup(_tiploc_to_crs_with_variants)
+
+    # Background fetch of Overpass station coordinates if the cache is missing
+    if not mileage._coord_fallback._cache_path.exists():
+        def _bg_coord_fetch() -> None:
+            try:
+                logger.info("Starting background Overpass coordinate fetch…")
+                mileage._coord_fallback.fetch_and_cache(corpus)
+                logger.info("Background Overpass coordinate fetch complete.")
+            except Exception as exc:
+                logger.warning("Background Overpass coordinate fetch failed: %s", exc)
+        threading.Thread(target=_bg_coord_fetch, daemon=True, name="coord-fetch").start()
 
     darwin = DarwinEnricher(
         api_url=settings.darwin_api_url,

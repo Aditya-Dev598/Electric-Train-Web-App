@@ -157,10 +157,13 @@ def hh_wide_to_hourly_wide(demand_csv: str) -> pd.DataFrame:
     out["Date"] = hh[date_col].dt.strftime("%d/%m/%Y")
     hour_cols = []
     for h in range(24):
-        t00 = f"{h:02d}:00"
+        # End-of-period labels: "h:30" = hh:00–hh:30, "(h+1):00" = hh:30–(h+1):00
+        # So the hour starting at h:00 contains half-periods h:30 and (h+1)%24:00
         t30 = f"{h:02d}:30"
-        out[t00] = (hh[t00] if t00 in hh.columns else 0) + (hh[t30] if t30 in hh.columns else 0)
-        hour_cols.append(t00)
+        t00next = f"{(h + 1) % 24:02d}:00"
+        hour_label = f"{h:02d}:00"
+        out[hour_label] = (hh[t30] if t30 in hh.columns else 0) + (hh[t00next] if t00next in hh.columns else 0)
+        hour_cols.append(hour_label)
 
     out["Total Units"] = out[hour_cols].sum(axis=1)
     return out[["Date", "Total Units"] + hour_cols]
