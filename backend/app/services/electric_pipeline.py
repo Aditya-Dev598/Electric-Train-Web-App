@@ -620,11 +620,12 @@ def combine_csvs(csv_texts: list[str]) -> str:
         key_cols = legacy_key
 
     if all(c in combined.columns for c in key_cols):
-        # Score each row by number of non-empty / non-null fields (higher = more data)
-        combined["_score"] = combined.apply(
-            lambda r: sum(1 for v in r if v is not None and str(v).strip() not in ("", "nan")),
-            axis=1,
-        )
+        # Score each row by number of non-empty / non-null fields (higher = more data).
+        # Vectorized: astype(str) + boolean compare + sum(axis=1) all run in C, unlike
+        # apply(axis=1) which calls a Python function once per row and dominates runtime
+        # once merges span hundreds of thousands of rows.
+        str_vals = combined.astype(str).apply(lambda col: col.str.strip())
+        combined["_score"] = ((str_vals != "") & (str_vals != "nan") & combined.notna()).sum(axis=1)
         combined = (
             combined
             .sort_values("_score", ascending=False)
