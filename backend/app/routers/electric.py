@@ -26,6 +26,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+from backend.app.services.csv_normalizer import normalize_csv_bytes, result_to_csv_bytes
 from backend.app.services.electric_pipeline import (
     combine_csvs,
     combine_route_csvs,
@@ -76,13 +77,76 @@ async def upload_electric_file(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    normalize_report: list[dict] = []
+    warnings: list[str] = []
+
+    # Normalize timetable and route CSVs to the canonical schema before saving
+    if file_type in ("timetable", "route"):
+        try:
+            result = normalize_csv_bytes(content, file_type)
+            content = result_to_csv_bytes(result)
+            normalize_report = result.mapping_report
+            warnings = result.warnings
+            if result.any_renamed():
+                logger.info(
+                    "Normalized %s CSV: %d column(s) remapped",
+                    file_type,
+                    sum(1 for m in result.mappings if m.source != m.target and m.method != "unmapped"),
+                )
+        except Exception as exc:
+            logger.warning("CSV normalization failed for %s, saving as-is: %s", file_type, exc)
+
     electric_dir = _get_electric_dir(request.app.state)
     electric_dir.mkdir(parents=True, exist_ok=True)
     dest = electric_dir / f"{file_type}.csv"
     dest.write_bytes(content)
     logger.info("Electric reference file saved: %s", dest)
 
-    return JSONResponse(content={"saved": file_type, "filename": file.filename or f"{file_type}.csv"})
+    return JSONResponse(content={
+        "saved": file_type,
+        "filename": file.filename or f"{file_type}.csv",
+        "normalize_report": normalize_report,
+        "warnings": warnings,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Normalize preview (dry-run: returns mapping without saving)
+# ---------------------------------------------------------------------------
+
+@router.post("/preview-normalize/{file_type}")
+async def preview_normalize(
+    file_type: str,
+    file: UploadFile = File(...),
+) -> JSONResponse:
+    """Dry-run normalization: shows how columns will be remapped without saving.
+
+    Returns a mapping_report list so the frontend can show the user exactly
+    what column renames will be applied when they upload the file.
+    """
+    if file_type not in ("timetable", "route"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Normalization preview is only available for 'timetable' and 'route', not '{file_type}'.",
+        )
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    try:
+        result = normalize_csv_bytes(content, file_type)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse CSV: {exc}") from exc
+
+    renamed = [m for m in result.mappings if m.source != m.target and m.method != "unmapped"]
+    return JSONResponse(content={
+        "file_type": file_type,
+        "mapping_report": result.mapping_report,
+        "columns_renamed": len(renamed),
+        "warnings": result.warnings,
+        "columns_detected": [m.source for m in result.mappings],
+        "columns_after": list(result.df.columns),
+    })
 
 
 # ---------------------------------------------------------------------------
